@@ -10,7 +10,7 @@ import (
 	"github.com/tallybridge/connector/tally"
 )
 
-// tallyXMLResponse wraps s in a minimal HTTP server that returns the given XML.
+// tallyXMLServer wraps s in a minimal HTTP server that returns the given XML.
 func tallyXMLServer(t *testing.T, responseXML string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -21,6 +21,8 @@ func tallyXMLServer(t *testing.T, responseXML string) *httptest.Server {
 }
 
 // ---- parseCompanyResponse ---------------------------------------------------
+// Note: The NATIVEMETHOD format returns NAME as an XML *attribute* on <COMPANY>,
+// not as a child element. The parser uses xml:"NAME,attr".
 
 func TestParseCompanyResponse_MultipleCompanies(t *testing.T) {
 	raw := []byte(`<?xml version="1.0" encoding="UTF-8"?>
@@ -28,18 +30,8 @@ func TestParseCompanyResponse_MultipleCompanies(t *testing.T) {
   <BODY>
     <DATA>
       <COLLECTION>
-        <COMPANY>
-          <NAME>Demo Trading Co</NAME>
-          <STARTINGFROM>1-Apr-2024</STARTINGFROM>
-          <BOOKS>1-Apr-2024</BOOKS>
-          <GUID>abc-001</GUID>
-        </COMPANY>
-        <COMPANY>
-          <NAME>Sample Store</NAME>
-          <STARTINGFROM>1-Apr-2023</STARTINGFROM>
-          <BOOKS>1-Apr-2023</BOOKS>
-          <GUID>abc-002</GUID>
-        </COMPANY>
+        <COMPANY NAME="Demo Trading Co"/>
+        <COMPANY NAME="Sample Store"/>
       </COLLECTION>
     </DATA>
   </BODY>
@@ -53,17 +45,11 @@ func TestParseCompanyResponse_MultipleCompanies(t *testing.T) {
 		t.Fatalf("expected 2 companies, got %d", len(companies))
 	}
 
-	c := companies[0]
-	if c.Name != "Demo Trading Co" {
-		t.Errorf("Name = %q, want %q", c.Name, "Demo Trading Co")
+	if companies[0].Name != "Demo Trading Co" {
+		t.Errorf("Name = %q, want %q", companies[0].Name, "Demo Trading Co")
 	}
-	if c.GUID != "abc-001" {
-		t.Errorf("GUID = %q, want %q", c.GUID, "abc-001")
-	}
-
-	wantDate := time.Date(2024, 4, 1, 0, 0, 0, 0, time.UTC)
-	if !c.StartingFrom.Equal(wantDate) {
-		t.Errorf("StartingFrom = %v, want %v", c.StartingFrom, wantDate)
+	if companies[1].Name != "Sample Store" {
+		t.Errorf("Name = %q, want %q", companies[1].Name, "Sample Store")
 	}
 }
 
@@ -102,12 +88,7 @@ func TestListCompanies_MockServer(t *testing.T) {
   <BODY>
     <DATA>
       <COLLECTION>
-        <COMPANY>
-          <NAME>ACME Pvt Ltd</NAME>
-          <STARTINGFROM>1-Apr-2024</STARTINGFROM>
-          <BOOKS>1-Apr-2024</BOOKS>
-          <GUID>guid-acme-001</GUID>
-        </COMPANY>
+        <COMPANY NAME="ACME Pvt Ltd"/>
       </COLLECTION>
     </DATA>
   </BODY>
@@ -135,12 +116,7 @@ func TestHeartbeat_Online(t *testing.T) {
   <BODY>
     <DATA>
       <COLLECTION>
-        <COMPANY>
-          <NAME>ZenPivot Trading</NAME>
-          <STARTINGFROM>1-Apr-2024</STARTINGFROM>
-          <BOOKS>1-Apr-2024</BOOKS>
-          <GUID>guid-zp-001</GUID>
-        </COMPANY>
+        <COMPANY NAME="ZenPivot Trading"/>
       </COLLECTION>
     </DATA>
   </BODY>

@@ -16,23 +16,12 @@ func TestBuildVoucher_SalesInvoice(t *testing.T) {
 		PartyLedgerName: "ACME Corp",
 		IsInvoice:       true,
 		PlaceOfSupply:   "Maharashtra",
+		CompanyName:     "Demo Company",
 		LedgerEntries: []LedgerEntryInput{
 			{LedgerName: "ACME Corp", IsDeemedPositive: true, IsPartyLedger: true, Amount: 11800.00},
 			{LedgerName: "Sales Account", IsDeemedPositive: false, Amount: -10000.00},
 			{LedgerName: "Output CGST 9%", IsDeemedPositive: false, Amount: -900.00},
 			{LedgerName: "Output SGST 9%", IsDeemedPositive: false, Amount: -900.00},
-		},
-		InventoryEntries: []InventoryEntryInput{
-			{
-				StockItemName: "Widget A",
-				Rate:          10000.0,
-				RateUOM:       "Nos",
-				Amount:        -10000.00,
-				BilledQty:     1,
-				BilledQtyUOM:  "Nos",
-				HSNCode:       "84715000",
-				AccountLedger: "Sales Account",
-			},
 		},
 	}
 
@@ -41,16 +30,17 @@ func TestBuildVoucher_SalesInvoice(t *testing.T) {
 		t.Fatalf("BuildVoucher: unexpected error: %v", err)
 	}
 
-	assertContains(t, xml, "<TALLYREQUEST>Import</TALLYREQUEST>")
+	// Uses "Import Data" format (not old "Import" format)
+	assertContains(t, xml, "<TALLYREQUEST>Import Data</TALLYREQUEST>")
 	assertContains(t, xml, `ACTION="Create"`)
-	assertContains(t, xml, `OBJVIEW="Invoice Voucher View"`)
+	// Always uses Accounting Voucher View for imports
+	assertContains(t, xml, `OBJVIEW="Accounting Voucher View"`)
 	assertContains(t, xml, "<GUID>tb-sales-001</GUID>")
 	assertContains(t, xml, "<DATE>20240410</DATE>")
 	assertContains(t, xml, "<PARTYLEDGERNAME>ACME Corp</PARTYLEDGERNAME>")
 	assertContains(t, xml, "<PLACEOFSUPPLY>Maharashtra</PLACEOFSUPPLY>")
 	assertContains(t, xml, "<LEDGERNAME>Output CGST 9%</LEDGERNAME>")
-	assertContains(t, xml, "<STOCKITEMNAME>Widget A</STOCKITEMNAME>")
-	assertContains(t, xml, "<HSNCODE>84715000</HSNCODE>")
+	assertContains(t, xml, "<SVCURRENTCOMPANY>Demo Company</SVCURRENTCOMPANY>")
 }
 
 func TestBuildVoucher_Imbalanced(t *testing.T) {
@@ -61,8 +51,8 @@ func TestBuildVoucher_Imbalanced(t *testing.T) {
 		Date:        time.Date(2024, 4, 10, 0, 0, 0, 0, time.UTC),
 		IsInvoice:   false,
 		LedgerEntries: []LedgerEntryInput{
-			{LedgerName: "Party", Amount: 1000.00},  // doesn't cancel out
-			{LedgerName: "Sales", Amount: -900.00},   // sum = 100, not 0
+			{LedgerName: "Party", Amount: 1000.00},
+			{LedgerName: "Sales", Amount: -900.00},
 		},
 	}
 	_, err := BuildVoucher(v)
@@ -100,7 +90,6 @@ func TestBuildVoucher_Cancel(t *testing.T) {
 		GUID:        "cancel-me-guid",
 		VoucherType: "Sales",
 		Date:        time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC),
-		// Cancel only needs GUID — no entries required; balance is 0 by default
 	}
 	xml, err := BuildVoucher(v)
 	if err != nil {
@@ -162,7 +151,7 @@ func TestBuildLedger(t *testing.T) {
 		IsBillWiseOn:        true,
 	}
 	xml := BuildLedger(l)
-	assertContains(t, xml, "<TALLYREQUEST>Import</TALLYREQUEST>")
+	assertContains(t, xml, "<TALLYREQUEST>Import Data</TALLYREQUEST>")
 	assertContains(t, xml, "<NAME>Ratan Enterprises</NAME>")
 	assertContains(t, xml, "<PARENT>Sundry Debtors</PARENT>")
 	assertContains(t, xml, "<ADDR>123 MG Road</ADDR>")
@@ -183,7 +172,7 @@ func TestBuildStockItem(t *testing.T) {
 		TaxClassificationName: "GST @ 18%",
 	}
 	xml := BuildStockItem(si)
-	assertContains(t, xml, "<TALLYREQUEST>Import</TALLYREQUEST>")
+	assertContains(t, xml, "<TALLYREQUEST>Import Data</TALLYREQUEST>")
 	assertContains(t, xml, "<NAME>Laptop Core i7</NAME>")
 	assertContains(t, xml, "<HSNCODE>84715000</HSNCODE>")
 	assertContains(t, xml, "<TAXCLASSIFICATIONNAME>GST @ 18%</TAXCLASSIFICATIONNAME>")

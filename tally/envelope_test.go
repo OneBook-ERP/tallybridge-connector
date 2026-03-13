@@ -18,10 +18,15 @@ func TestBuildCollection_Basic(t *testing.T) {
 	assertContains(t, got, "<TALLYREQUEST>Export</TALLYREQUEST>")
 	assertContains(t, got, "<TYPE>Collection</TYPE>")
 	assertContains(t, got, "<ID>List of Companies</ID>")
-	assertContains(t, got, `TYPE="Company"`)
-	assertContains(t, got, "<FETCH>Name</FETCH>")
-	assertContains(t, got, "<FETCH>GUID</FETCH>")
+	// TYPE is a child element inside COLLECTION, not an attribute
+	assertContains(t, got, "<TYPE>Company</TYPE>")
+	// Uses NATIVEMETHOD, not FETCH
+	assertContains(t, got, "<NATIVEMETHOD>Name</NATIVEMETHOD>")
+	assertContains(t, got, "<NATIVEMETHOD>GUID</NATIVEMETHOD>")
 	assertContains(t, got, "$$SysName:XML")
+	// Required boolean attributes on COLLECTION
+	assertContains(t, got, `ISMODIFY="No"`)
+	assertContains(t, got, `ISFIXED="No"`)
 }
 
 func TestBuildCollection_WithCompanyAndDates(t *testing.T) {
@@ -29,9 +34,9 @@ func TestBuildCollection_WithCompanyAndDates(t *testing.T) {
 	to := time.Date(2025, 3, 31, 0, 0, 0, 0, time.UTC)
 
 	req := CollectionRequest{
-		Name:  "Vouchers",
-		Type:  "Voucher",
-		Fetch: []string{"GUID", "DATE"},
+		Name:   "Vouchers",
+		Type:   "Voucher",
+		Fetch:  []string{"GUID", "DATE"},
 		Filter: "$$IsAlteredSince:20240401000000",
 		Vars: StaticVars{
 			Company:  "Demo Company",
@@ -44,7 +49,10 @@ func TestBuildCollection_WithCompanyAndDates(t *testing.T) {
 	assertContains(t, got, "<SVCURRENTCOMPANY>Demo Company</SVCURRENTCOMPANY>")
 	assertContains(t, got, ">1-Apr-2024<")
 	assertContains(t, got, ">31-Mar-2025<")
-	assertContains(t, got, `FILTERS="$$IsAlteredSince:20240401000000"`)
+	// Filter uses FILTERS child element + SYSTEM Formulae element
+	assertContains(t, got, "<FILTERS>VouchersFilter</FILTERS>")
+	assertContains(t, got, `<SYSTEM TYPE="Formulae" NAME="VouchersFilter">`)
+	assertContains(t, got, "$$IsAlteredSince:20240401000000</SYSTEM>")
 }
 
 func TestBuildCollection_XMLEscaping(t *testing.T) {
@@ -79,15 +87,18 @@ func TestBuildObject(t *testing.T) {
 
 func TestBuildImport(t *testing.T) {
 	req := ImportRequest{
-		Type: "Vouchers",
-		Body: `<VOUCHER VCHTYPE="Sales"></VOUCHER>`,
+		Type:    "Vouchers",
+		Company: "Demo Company",
+		Body:    `<VOUCHER VCHTYPE="Sales"></VOUCHER>`,
 	}
 	got := BuildImport(req)
 
-	assertContains(t, got, "<TALLYREQUEST>Import</TALLYREQUEST>")
-	assertContains(t, got, "<TYPE>Data</TYPE>")
-	assertContains(t, got, "<ID>Vouchers</ID>")
+	// Import uses "Import Data" request format with IMPORTDATA wrapper
+	assertContains(t, got, "<TALLYREQUEST>Import Data</TALLYREQUEST>")
+	assertContains(t, got, "<REPORTNAME>Vouchers</REPORTNAME>")
+	assertContains(t, got, "<SVCURRENTCOMPANY>Demo Company</SVCURRENTCOMPANY>")
 	assertContains(t, got, `<VOUCHER VCHTYPE="Sales"></VOUCHER>`)
+	assertContains(t, got, "<TALLYMESSAGE")
 }
 
 // assertContains is a helper that fails the test if needle is absent from haystack.
