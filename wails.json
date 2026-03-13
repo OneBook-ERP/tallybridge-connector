@@ -1,0 +1,19 @@
+{
+    "name": "TallyBridge Connector",
+    "outputfilename": "tallybridge-connector",
+    "frontend:install": "npm install",
+    "frontend:build": "npm run build",
+    "frontend:dev:watcher": "npm run dev",
+    "frontend:dev:serverUrl": "auto",
+    "author": {
+        "name": "TallyBridge",
+        "email": "engineering@tallybridge.localhost"
+    },
+    "info": {
+        "companyName": "TallyBridge",
+        "productName": "TallyBridge Connector",
+        "productVersion": "1.0.0",
+        "copyright": "Copyright 2024",
+        "comments": "Tally to ERPNext Bidirectional Sync"
+    }
+}
