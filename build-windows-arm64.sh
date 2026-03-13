@@ -20,7 +20,7 @@ export CXX="zig c++ -target aarch64-windows-gnu"
 
 # Build the Go binary (without Wails — Wails doesn't support cross-compilation directly)
 # We use go build with the embedded frontend
-go build -o build/bin/tallybridge-connector-arm64.exe -ldflags="-s -w" .
+go build -o build/bin/tallybridge-connector-arm64.exe -ldflags="-s -w -H windowsgui" .
 
 echo ""
 echo "=== Build complete ==="

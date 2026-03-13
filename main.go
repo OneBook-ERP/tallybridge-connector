@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
 	"github.com/tallybridge/connector/store"
 	"github.com/tallybridge/connector/tally"
@@ -44,7 +46,16 @@ func main() {
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 243, G: 244, B: 246, A: 255}, // Tailwind gray-100
-		OnStartup:        app.startup,
+		OnStartup: func(ctx context.Context) {
+			app.startup(ctx)
+			app.setupSystray()
+		},
+		OnBeforeClose:    app.hideWindowInsteadOfClose,
+		HideWindowOnClose: true,
+		Windows: &windows.Options{
+			WebviewIsTransparent: false,
+			WindowIsTranslucent:  false,
+		},
 		Bind: []interface{}{
 			app,
 		},
