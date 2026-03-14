@@ -21,6 +21,8 @@ type SyncBatch struct {
 	FromTimestamp string            `json:"fromTimestamp"`
 	ToTimestamp   string            `json:"toTimestamp"`
 	Vouchers      []*reader.Voucher `json:"vouchers,omitempty"`
+	Ledgers       []reader.Ledger   `json:"ledgers,omitempty"`
+	StockItems    []reader.StockItem `json:"stockItems,omitempty"`
 }
 
 // DeltaSync performs one cycle of querying Tally for changes and sending them to the cloud.
@@ -56,15 +58,81 @@ func DeltaSync(ctx context.Context, client *tally.Client, db *store.Store, cloud
 		}
 	}
 
-	if len(active) == 0 {
+	// 3b. Fetch master data (ledgers + stock items) — sent with the first batch
+	//     so the cloud has party address/contact/group info before processing vouchers.
+	var ledgers []reader.Ledger
+	var stockItems []reader.StockItem
+
+	lastMasterSync := db.GetLastSyncAt("masters")
+	if lastMasterSync == "" || lastSyncTS == "" {
+		// First sync or never synced masters — fetch all
+		fmt.Println("Fetching ledger masters from Tally...")
+		if l, err := reader.ListLedgers(ctx, client, companyName); err == nil {
+			ledgers = l
+			fmt.Printf("Fetched %d ledgers\n", len(ledgers))
+		} else {
+			fmt.Printf("Warning: failed to fetch ledgers: %v\n", err)
+		}
+
+		fmt.Println("Fetching stock item masters from Tally...")
+		if s, err := reader.ListStockItems(ctx, client, companyName); err == nil {
+			stockItems = s
+			fmt.Printf("Fetched %d stock items\n", len(stockItems))
+		} else {
+			fmt.Printf("Warning: failed to fetch stock items: %v\n", err)
+		}
+	}
+
+	if len(active) == 0 && len(ledgers) == 0 && len(stockItems) == 0 {
 		fmt.Printf("Delta sync: no new vouchers since %s\n", lastSyncTS)
 		return nil
 	}
 
-	// 4. Send vouchers to cloud in batches of 500 to avoid huge payloads
+	// 4. Send master data to cloud first (so party addresses exist before voucher processing)
 	now := time.Now()
 	toTS := now.Format("20060102150405")
 
+	if len(ledgers) > 0 {
+		fmt.Printf("Uploading %d ledger masters to cloud...\n", len(ledgers))
+		masterBatch := SyncBatch{
+			CompanyID:     companyID,
+			BatchID:       fmt.Sprintf("%d-masters-ledgers", now.UnixNano()),
+			FromTimestamp: lastSyncTS,
+			ToTimestamp:   toTS,
+			Ledgers:       ledgers,
+		}
+		if err := sendBatchToCloud(ctx, cloudURL, machineToken, masterBatch); err != nil {
+			fmt.Printf("Warning: failed to send ledger masters: %v\n", err)
+		}
+	}
+
+	if len(stockItems) > 0 {
+		fmt.Printf("Uploading %d stock item masters to cloud...\n", len(stockItems))
+		itemBatch := SyncBatch{
+			CompanyID:     companyID,
+			BatchID:       fmt.Sprintf("%d-masters-items", now.UnixNano()),
+			FromTimestamp: lastSyncTS,
+			ToTimestamp:   toTS,
+			StockItems:    stockItems,
+		}
+		if err := sendBatchToCloud(ctx, cloudURL, machineToken, itemBatch); err != nil {
+			fmt.Printf("Warning: failed to send stock item masters: %v\n", err)
+		}
+	}
+
+	// Update master sync watermark
+	if len(ledgers) > 0 || len(stockItems) > 0 {
+		if err := db.SetLastSyncAt("masters", toTS); err != nil {
+			fmt.Printf("Warning: failed to update masters sync watermark: %v\n", err)
+		}
+	}
+
+	if len(active) == 0 {
+		fmt.Printf("Delta sync: pushed %d ledgers, %d items (no new vouchers)\n", len(ledgers), len(stockItems))
+		return nil
+	}
+
+	// 5. Send vouchers to cloud in batches of 500 to avoid huge payloads
 	const batchSize = 500
 	totalSent := 0
 

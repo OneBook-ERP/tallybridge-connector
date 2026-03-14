@@ -22,6 +22,7 @@ type Ledger struct {
 	StateName            string
 	Email                string
 	Mobile               string
+	Phone                string
 	PanItNo              string
 	GSTRegistrationType  string
 	PartyGSTIN           string
@@ -43,17 +44,23 @@ type ledgersBody struct{ Data ledgersData `xml:"DATA"` }
 type ledgersData struct{ Collection ledgersCollection `xml:"COLLECTION"` }
 type ledgersCollection struct{ Ledgers []xmlLedger `xml:"LEDGER"` }
 
+// xmlAddressList maps the ADDRESS.LIST > ADDRESS elements in Tally XML.
+type xmlAddressList struct {
+	Lines []string `xml:"ADDRESS"`
+}
+
 type xmlLedger struct {
 	Name                string   `xml:"NAME,attr"` // Tally returns NAME as an XML attribute on <LEDGER>
 	Parent              string   `xml:"PARENT"`
 	GUID                string   `xml:"GUID"`
 	MailingName         string   `xml:"MAILINGNAME"`
-	Address             []string `xml:"ADDRESS>ADDR"`
+	Address             xmlAddressList `xml:"ADDRESS.LIST"`
 	PinCode             string   `xml:"PINCODE"`
 	CountryName         string   `xml:"COUNTRYNAME"`
 	LedStateName        string   `xml:"LEDSTATENAME"`
 	Email               string   `xml:"EMAIL"`
 	LedgerMobile        string   `xml:"LEDGERMOBILE"`
+	LedgerPhone         string   `xml:"LEDGERPHONE"`
 	PanItNo             string   `xml:"PANITNO"`
 	GSTRegistrationType string   `xml:"GSTREGISTRATIONTYPE"`
 	PartyGSTIN          string   `xml:"PARTYGSTIN"`
@@ -69,7 +76,7 @@ type xmlLedger struct {
 
 var ledgerFetchFields = []string{
 	"Name", "Parent", "GUID", "MailingName", "Address", "PinCode",
-	"CountryName", "LedStateName", "Email", "LedgerMobile", "PanItNo",
+	"CountryName", "LedStateName", "Email", "LedgerMobile", "LedgerPhone", "PanItNo",
 	"GSTRegistrationType", "PartyGSTIN", "IsBillWiseOn", "CreditPeriod",
 	"OpeningBalance", "IsTDSApplicable", "TDSNatureOfPayment",
 	"BankAccountNumber", "IFSCode", "ALTEREDON",
@@ -98,12 +105,13 @@ func ListLedgers(ctx context.Context, c *tally.Client, company string) ([]Ledger
 			Parent:              xl.Parent,
 			GUID:                xl.GUID,
 			MailingName:         xl.MailingName,
-			Address:             xl.Address,
+			Address:             xl.Address.Lines,
 			PinCode:             xl.PinCode,
 			CountryName:         xl.CountryName,
 			StateName:           xl.LedStateName,
 			Email:               xl.Email,
 			Mobile:              xl.LedgerMobile,
+			Phone:               xl.LedgerPhone,
 			PanItNo:             xl.PanItNo,
 			GSTRegistrationType: xl.GSTRegistrationType,
 			PartyGSTIN:          xl.PartyGSTIN,

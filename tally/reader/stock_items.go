@@ -33,24 +33,33 @@ type stockItemsBody struct{ Data stockItemsData `xml:"DATA"` }
 type stockItemsData struct{ Collection stockItemsCollection `xml:"COLLECTION"` }
 type stockItemsCollection struct{ Items []xmlStockItem `xml:"STOCKITEM"` }
 
+// xmlHSNDetails maps the nested HSNDETAILS.LIST element where Tally stores HSN codes.
+// Tally stores HSN in HSNDETAILS.LIST > HSNCODE, NOT in GSTDETAILS.LIST > HSNCODE
+// (the latter is consistently empty even when HSN is set in Tally UI).
+type xmlHSNDetails struct {
+	HSNCode string `xml:"HSNCODE"`
+}
+
 type xmlStockItem struct {
-	Name                  string `xml:"NAME,attr"` // NAME is an XML attribute on <STOCKITEM>
-	Parent                string `xml:"PARENT"`
-	BaseUnits             string `xml:"BASEUNITS"`
-	GUID                  string `xml:"GUID"`
-	HSNCode               string `xml:"HSNCODE"`
-	GSTApplicable         string `xml:"GSTAPPLICABLE"`
-	TaxClassificationName string `xml:"TAXCLASSIFICATIONNAME"`
-	GSTRate               string `xml:"GSTRATE"`
-	OpeningBalance        string `xml:"OPENINGBALANCE"`
-	OpeningRate           string `xml:"OPENINGRATE"`
-	AlteredOn             string `xml:"ALTEREDON"`
+	Name                  string          `xml:"NAME,attr"` // NAME is an XML attribute on <STOCKITEM>
+	Parent                string          `xml:"PARENT"`
+	BaseUnits             string          `xml:"BASEUNITS"`
+	GUID                  string          `xml:"GUID"`
+	HSNCode               string          `xml:"HSNCODE"` // from GSTDETAILS — usually empty
+	HSNDetails            []xmlHSNDetails `xml:"HSNDETAILS.LIST"`
+	GSTApplicable         string          `xml:"GSTAPPLICABLE"`
+	TaxClassificationName string          `xml:"TAXCLASSIFICATIONNAME"`
+	GSTRate               string          `xml:"GSTRATE"`
+	OpeningBalance        string          `xml:"OPENINGBALANCE"`
+	OpeningRate           string          `xml:"OPENINGRATE"`
+	AlteredOn             string          `xml:"ALTEREDON"`
 }
 
 var stockItemFetchFields = []string{
-	"Name", "Parent", "BaseUnits", "GUID", "HSNCode",
+	"Name", "Parent", "BaseUnits", "GUID",
 	"GSTApplicable", "TaxClassificationName", "GSTRate",
 	"OpeningBalance", "OpeningRate", "ALTEREDON",
+	"*", // wildcard fetches full object including HSNDETAILS.LIST
 }
 
 // ListStockItems fetches all stock item masters from Tally (API 5).
@@ -71,12 +80,18 @@ func ListStockItems(ctx context.Context, c *tally.Client, company string) ([]Sto
 	}
 	out := make([]StockItem, 0, len(env.Body.Data.Collection.Items))
 	for _, xi := range env.Body.Data.Collection.Items {
+		// Prefer HSN from HSNDETAILS.LIST (where Tally actually stores it),
+		// fall back to direct HSNCODE field (GSTDETAILS — usually empty).
+		hsn := xi.HSNCode
+		if len(xi.HSNDetails) > 0 && xi.HSNDetails[0].HSNCode != "" {
+			hsn = xi.HSNDetails[0].HSNCode
+		}
 		item := StockItem{
 			Name:                  xi.Name,
 			Parent:                xi.Parent,
 			BaseUnits:             xi.BaseUnits,
 			GUID:                  xi.GUID,
-			HSNCode:               xi.HSNCode,
+			HSNCode:               hsn,
 			GSTApplicable:         xi.GSTApplicable,
 			TaxClassificationName: xi.TaxClassificationName,
 			GSTRate:               parser.ParseAmount(xi.GSTRate),
