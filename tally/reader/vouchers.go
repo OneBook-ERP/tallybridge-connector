@@ -342,7 +342,7 @@ func mapXMLVoucher(xv xmlVoucher) Voucher {
 			le.BillAllocations = append(le.BillAllocations, ba)
 		}
 		for _, xbk := range xl.BankAllocations {
-			le.BankAllocations = append(le.BankAllocations, BankAllocation{
+			le.BankAllocations = append(le.BankAllocations, BankAllocation{ //nolint:gosimple // different struct tags (xml vs json)
 				InstNumber:            xbk.InstNumber,
 				UniqueReferenceNumber: xbk.UniqueReferenceNumber,
 				TransactionType:       xbk.TransactionType,

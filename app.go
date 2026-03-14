@@ -633,11 +633,12 @@ func (a *App) ValidateSetup(erpCompany, fromDate, toDate string) []map[string]in
 
 	// 1. ERPNext company exists
 	data, status, err := a.erpCall("GET", fmt.Sprintf(`/api/resource/Company/%s`, erpCompany), nil)
-	if err != nil {
+	switch {
+	case err != nil:
 		add("ERPNext Company", "error", "Cannot reach ERPNext: "+err.Error(), false)
-	} else if status == 404 || (status != 200 && status != 302) {
+	case status == 404 || (status != 200 && status != 302):
 		add("ERPNext Company", "fail", fmt.Sprintf("Company %q not found in ERPNext", erpCompany), true)
-	} else {
+	default:
 		_ = data
 		add("ERPNext Company", "ok", erpCompany+" exists", false)
 	}

@@ -26,13 +26,14 @@ func ParseAmount(s string) float64 {
 
 	// Suffix " Cr" → credit, which Tally represents as a positive balance
 	// but we store as negative (liability/income convention).
-	if strings.HasSuffix(s, " Cr") {
+	switch {
+	case strings.HasSuffix(s, " Cr"):
 		negate = true
 		s = strings.TrimSuffix(s, " Cr")
-	} else if strings.HasSuffix(s, " Dr") {
+	case strings.HasSuffix(s, " Dr"):
 		// Debit is already positive; strip suffix only.
 		s = strings.TrimSuffix(s, " Dr")
-	} else if strings.HasSuffix(s, "-") {
+	case strings.HasSuffix(s, "-"):
 		// Trailing minus sign variant.
 		negate = true
 		s = strings.TrimSuffix(s, "-")

@@ -33,9 +33,9 @@ func sanitizeTallyXML(b []byte) []byte {
 		s := string(ref)
 		var cp int
 		if s[2] == 'x' || s[2] == 'X' {
-			fmt.Sscanf(s[3:len(s)-1], "%x", &cp)
+			_, _ = fmt.Sscanf(s[3:len(s)-1], "%x", &cp)
 		} else {
-			fmt.Sscanf(s[2:len(s)-1], "%d", &cp)
+			_, _ = fmt.Sscanf(s[2:len(s)-1], "%d", &cp)
 		}
 		// Keep: TAB (9), LF (10), CR (13), space and above (≥32)
 		if cp == 9 || cp == 10 || cp == 13 || cp >= 32 {

@@ -49,12 +49,7 @@ func ListCostCentres(ctx context.Context, c *tally.Client, company string) ([]Co
 	}
 	out := make([]CostCentre, 0, len(env.Body.Data.Collection.CostCentres))
 	for _, xc := range env.Body.Data.Collection.CostCentres {
-		out = append(out, CostCentre{
-			Name:     xc.Name,
-			Parent:   xc.Parent,
-			Category: xc.Category,
-			GUID:     xc.GUID,
-		})
+		out = append(out, CostCentre(xc))
 	}
 	return out, nil
 }

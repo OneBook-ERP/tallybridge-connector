@@ -74,8 +74,8 @@ func TestConfig_SetAndGet(t *testing.T) {
 func TestConfig_UpsertOverwrites(t *testing.T) {
 	s := testStore(t)
 
-	s.SetConfig("cloud_url", "http://old.com")
-	s.SetConfig("cloud_url", "http://new.com")
+	_ = s.SetConfig("cloud_url", "http://old.com")
+	_ = s.SetConfig("cloud_url", "http://new.com")
 
 	v := s.GetConfig("cloud_url")
 	if v != "http://new.com" {
