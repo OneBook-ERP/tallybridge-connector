@@ -44,16 +44,23 @@ func DeltaSync(ctx context.Context, client *tally.Client, db *store.Store, cloud
 		}
 	}
 
+	// For incremental syncs (watermark already set), always extend toDate to today.
+	// The configured toDate is only meant to bound the first historical import;
+	// keeping it for delta syncs would exclude vouchers created in a new FY.
+	if lastSyncTS != "" {
+		toDate = time.Now()
+	}
+
 	// 3. Query Tally for vouchers altered since watermark
 	vouchers, err := reader.ListDeltaVouchers(ctx, client, companyName, lastSyncTS, fromDate, toDate)
 	if err != nil {
 		return fmt.Errorf("ListDeltaVouchers: %w", err)
 	}
 
-	// Filter optional (draft) vouchers — PRD edge case #1
+	// Filter out draft (IsOptional), cancelled, and deleted vouchers.
 	var active []reader.Voucher
 	for _, v := range vouchers {
-		if !v.IsOptional {
+		if !v.IsOptional && !v.IsCancelled && !v.IsDeleted {
 			active = append(active, v)
 		}
 	}
@@ -75,7 +82,7 @@ func DeltaSync(ctx context.Context, client *tally.Client, db *store.Store, cloud
 		}
 
 		fmt.Println("Fetching stock item masters from Tally...")
-		if s, err := reader.ListStockItems(ctx, client, companyName); err == nil {
+		if s, err := reader.ListStockItems(ctx, client, companyName, fromDate, toDate); err == nil {
 			stockItems = s
 			fmt.Printf("Fetched %d stock items\n", len(stockItems))
 		} else {

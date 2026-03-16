@@ -4,7 +4,7 @@ build:
 	wails build
 
 dev:
-	wails dev
+	PATH="/opt/homebrew/opt/node@25/bin:/opt/homebrew/bin:$$PATH" ~/go/bin/wails dev
 
 test:
 	CGO_ENABLED=1 go test ./...

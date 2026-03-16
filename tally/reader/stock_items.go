@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/tallybridge/connector/tally"
@@ -20,8 +21,9 @@ type StockItem struct {
 	GSTApplicable         string
 	TaxClassificationName string
 	GSTRate               float64
-	OpeningBalance        float64 // qty only; use OpeningBalanceQty for structured
-	OpeningRate           float64
+	OpeningBalance        float64 // opening qty
+	OpeningRate           float64 // per-unit rate (may be 0 if Tally doesn't have it)
+	OpeningValue          float64 // total opening value = qty × rate (use this when OpeningRate is 0)
 	AlteredOn             time.Time
 }
 
@@ -52,23 +54,27 @@ type xmlStockItem struct {
 	GSTRate               string          `xml:"GSTRATE"`
 	OpeningBalance        string          `xml:"OPENINGBALANCE"`
 	OpeningRate           string          `xml:"OPENINGRATE"`
+	OpeningValue          string          `xml:"OPENINGVALUE"` // total opening value (qty × rate)
 	AlteredOn             string          `xml:"ALTEREDON"`
 }
 
 var stockItemFetchFields = []string{
 	"Name", "Parent", "BaseUnits", "GUID",
 	"GSTApplicable", "TaxClassificationName", "GSTRate",
-	"OpeningBalance", "OpeningRate", "ALTEREDON",
+	"OpeningBalance", "OpeningRate", "OpeningValue", "ALTEREDON",
 	"*", // wildcard fetches full object including HSNDETAILS.LIST
 }
 
 // ListStockItems fetches all stock item masters from Tally (API 5).
-func ListStockItems(ctx context.Context, c *tally.Client, company string) ([]StockItem, error) {
+// fromDate should be the FY start (e.g. 2023-04-01) so Tally returns the correct
+// opening balance for that fiscal year. Without it Tally defaults to the current
+// session FY and returns 0 opening balance for prior-year companies.
+func ListStockItems(ctx context.Context, c *tally.Client, company string, fromDate, toDate time.Time) ([]StockItem, error) {
 	xmlBody := tally.BuildCollection(tally.CollectionRequest{
 		Name:  "TBStockItems",
 		Type:  "Stock Item",
 		Fetch: stockItemFetchFields,
-		Vars:  tally.StaticVars{Company: company},
+		Vars:  tally.StaticVars{Company: company, FromDate: fromDate, ToDate: toDate},
 	})
 	raw, err := c.Post(ctx, xmlBody)
 	if err != nil {
@@ -86,6 +92,17 @@ func ListStockItems(ctx context.Context, c *tally.Client, company string) ([]Sto
 		if len(xi.HSNDetails) > 0 && xi.HSNDetails[0].HSNCode != "" {
 			hsn = xi.HSNDetails[0].HSNCode
 		}
+		openingQty := parser.ParseAmount(xi.OpeningBalance)   // format: "1000.000 KGS" — UOM suffix stripped by ParseAmount
+		openingRate, _, _ := parser.ParseRate(xi.OpeningRate) // format: "36.50/KGS" — ParseAmount can't handle slash
+		openingValue := math.Abs(parser.ParseAmount(xi.OpeningValue)) // Tally stores as negative (Cr convention); normalise
+		// If Tally has total value but not per-unit rate, derive rate from value/qty
+		if openingRate == 0 && openingValue != 0 && openingQty != 0 {
+			openingRate = openingValue / openingQty
+		}
+		// If we have rate but not value, derive value
+		if openingValue == 0 && openingRate != 0 && openingQty != 0 {
+			openingValue = openingQty * openingRate
+		}
 		item := StockItem{
 			Name:                  xi.Name,
 			Parent:                xi.Parent,
@@ -95,8 +112,9 @@ func ListStockItems(ctx context.Context, c *tally.Client, company string) ([]Sto
 			GSTApplicable:         xi.GSTApplicable,
 			TaxClassificationName: xi.TaxClassificationName,
 			GSTRate:               parser.ParseAmount(xi.GSTRate),
-			OpeningBalance:        parser.ParseAmount(xi.OpeningBalance),
-			OpeningRate:           parser.ParseAmount(xi.OpeningRate),
+			OpeningBalance:        openingQty,
+			OpeningRate:           openingRate,
+			OpeningValue:          openingValue,
 		}
 		if t, err := parser.ParseDate(xi.AlteredOn); err == nil {
 			item.AlteredOn = t

@@ -7,3 +7,4 @@ frontend/dist/
 *.exe
 .DS_Store
 *.log
+resource_windows.syso

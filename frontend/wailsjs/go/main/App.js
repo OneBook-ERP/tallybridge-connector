@@ -6,12 +6,20 @@ export function ConnectTally(arg1) {
   return window['go']['main']['App']['ConnectTally'](arg1);
 }
 
+export function CreateERPNextCustomFields() {
+  return window['go']['main']['App']['CreateERPNextCustomFields']();
+}
+
 export function CreateERPNextFiscalYear(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['CreateERPNextFiscalYear'](arg1, arg2, arg3, arg4);
 }
 
 export function DataQualityScan(arg1) {
   return window['go']['main']['App']['DataQualityScan'](arg1);
+}
+
+export function FetchAPITokenViaLogin(arg1, arg2, arg3) {
+  return window['go']['main']['App']['FetchAPITokenViaLogin'](arg1, arg2, arg3);
 }
 
 export function GetAllConfig() {
@@ -86,6 +94,10 @@ export function SaveERPNextMapping(arg1) {
   return window['go']['main']['App']['SaveERPNextMapping'](arg1);
 }
 
+export function SaveERPNextSettings(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveERPNextSettings'](arg1, arg2, arg3);
+}
+
 export function SaveSyncRange(arg1, arg2) {
   return window['go']['main']['App']['SaveSyncRange'](arg1, arg2);
 }
@@ -100,6 +112,10 @@ export function SetConfigValue(arg1, arg2) {
 
 export function SetMappingConfig(arg1, arg2) {
   return window['go']['main']['App']['SetMappingConfig'](arg1, arg2);
+}
+
+export function SetupERPNextWebhooks() {
+  return window['go']['main']['App']['SetupERPNextWebhooks']();
 }
 
 export function StartBackgroundSync() {
@@ -120,4 +136,12 @@ export function ValidateERPNextRequirements() {
 
 export function ValidateSetup(arg1, arg2, arg3) {
   return window['go']['main']['App']['ValidateSetup'](arg1, arg2, arg3);
+}
+
+export function GetAutoStartEnabled() {
+  return window['go']['main']['App']['GetAutoStartEnabled']();
+}
+
+export function SetAutoStart(arg1) {
+  return window['go']['main']['App']['SetAutoStart'](arg1);
 }

@@ -25,6 +25,7 @@ type Voucher struct {
 	IsInvoice         bool            `json:"isInvoice"`
 	IsOptional        bool            `json:"isOptional"`
 	IsCancelled       bool            `json:"isCancelled"`
+	IsDeleted         bool            `json:"isDeleted"`
 	Narration         string          `json:"narration"`
 	ForeignCurrency   string          `json:"foreignCurrency"`
 	ForeignAmount     float64         `json:"foreignAmount"`
@@ -95,12 +96,13 @@ type xmlVoucher struct {
 	AlteredOn         string              `xml:"ALTEREDON"`
 	VoucherTypeName   string              `xml:"VOUCHERTYPENAME"`
 	VoucherNumber     string              `xml:"VOUCHERNUMBER"`
-	ReferenceNumber   string              `xml:"REFERENCENUMBER"`
+	ReferenceNumber   string              `xml:"REFERENCE"` // Tally returns reference under <REFERENCE>, not <REFERENCENUMBER>
 	ReferenceDate     string              `xml:"REFERENCEDATE"`
 	PartyLedgerName   string              `xml:"PARTYLEDGERNAME"`
 	IsInvoice         string              `xml:"ISINVOICE"`
 	IsOptional        string              `xml:"ISOPTIONAL"`
 	IsCancelled       string              `xml:"ISCANCELLED"`
+	IsDeleted         string              `xml:"ISDELETED"`
 	Narration         string              `xml:"NARRATION"`
 	ForeignCurrency   string              `xml:"FOREIGNCURRENCY"`
 	ForeignAmount     string              `xml:"FOREIGNAMOUNT"`
@@ -141,7 +143,7 @@ type xmlInventoryEntry struct {
 	Amount           string            `xml:"AMOUNT"`
 	ActualQty        string            `xml:"ACTUALQTY"`
 	BilledQty        string            `xml:"BILLEDQTY"`
-	HSNCode          string            `xml:"HSNCODE"`
+	HSNCode          string            `xml:"GSTHSNNAME"` // Tally returns HSN under GSTHSNNAME, not HSNCODE
 	GSTOvrdnRate     string            `xml:"GSTOVRDNRATE"`
 	BatchAllocations []xmlBatchAlloc   `xml:"BATCHALLOCATIONS.LIST"`
 	AcctAllocations  []xmlAcctAlloc    `xml:"ACCOUNTINGALLOCATIONS.LIST"`
@@ -160,8 +162,8 @@ type xmlAcctAlloc struct {
 
 var voucherFetchFields = []string{
 	"GUID", "Date", "VoucherTypeName", "VoucherNumber",
-	"ReferenceNumber", "ReferenceDate", "PartyLedgerName",
-	"IsInvoice", "IsOptional", "IsCancelled", "Narration",
+	"Reference", "ReferenceDate", "PartyLedgerName",
+	"IsInvoice", "IsOptional", "IsCancelled", "IsDeleted", "Narration",
 	"ForeignCurrency", "ForeignAmount", "PlaceOfSupply",
 	"PartyGSTIN", "IsRCMApplicable", "EWayBillNumber", "IRNNO",
 	"ALTEREDON", "AllLedgerEntries", "AllInventoryEntries", "BillAllocations",
@@ -302,6 +304,7 @@ func mapXMLVoucher(xv xmlVoucher) Voucher {
 		IsInvoice:       parser.ParseBool(xv.IsInvoice),
 		IsOptional:      parser.ParseBool(xv.IsOptional),
 		IsCancelled:     parser.ParseBool(xv.IsCancelled),
+		IsDeleted:       parser.ParseBool(xv.IsDeleted),
 		Narration:       xv.Narration,
 		ForeignCurrency: xv.ForeignCurrency,
 		ForeignAmount:   parser.ParseAmount(xv.ForeignAmount),

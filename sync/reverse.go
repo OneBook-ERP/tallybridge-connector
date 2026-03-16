@@ -25,6 +25,7 @@ type TallyVoucherInput struct {
 	Date             string                    `json:"date"` // yyyymmdd
 	VoucherNumber    string                    `json:"voucherNumber"`
 	ReferenceNumber  string                    `json:"referenceNumber"`
+	ReferenceDate    string                    `json:"referenceDate"` // yyyymmdd
 	PartyLedgerName  string                    `json:"partyLedgerName"`
 	Narration        string                    `json:"narration"`
 	IsInvoice        bool                      `json:"isInvoice"`
@@ -259,6 +260,11 @@ func toWriterVoucherInput(in TallyVoucherInput) (writer.VoucherInput, error) {
 		})
 	}
 
+	var refDate time.Time
+	if in.ReferenceDate != "" {
+		refDate, _ = time.Parse("20060102", in.ReferenceDate)
+	}
+
 	return writer.VoucherInput{
 		Action:           action,
 		GUID:             in.GUID,
@@ -267,6 +273,7 @@ func toWriterVoucherInput(in TallyVoucherInput) (writer.VoucherInput, error) {
 		Date:             date,
 		VoucherNumber:    in.VoucherNumber,
 		ReferenceNumber:  in.ReferenceNumber,
+		ReferenceDate:    refDate,
 		PartyLedgerName:  in.PartyLedgerName,
 		Narration:        in.Narration,
 		IsInvoice:        in.IsInvoice,

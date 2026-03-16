@@ -3,9 +3,13 @@
 
 export function ConnectTally(arg1:string):Promise<Record<string, any>>;
 
+export function CreateERPNextCustomFields():Promise<Record<string, any>>;
+
 export function CreateERPNextFiscalYear(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Record<string, any>>;
 
 export function DataQualityScan(arg1:string):Promise<Record<string, any>>;
+
+export function FetchAPITokenViaLogin(arg1:string,arg2:string,arg3:string):Promise<Record<string, any>>;
 
 export function GetAllConfig():Promise<Record<string, string>>;
 
@@ -43,6 +47,8 @@ export function SaveConfig(arg1:string,arg2:string,arg3:string,arg4:string,arg5:
 
 export function SaveERPNextMapping(arg1:string):Promise<void>;
 
+export function SaveERPNextSettings(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function SaveSyncRange(arg1:string,arg2:string):Promise<void>;
 
 export function ScanTally():Promise<Record<string, any>>;
@@ -50,6 +56,8 @@ export function ScanTally():Promise<Record<string, any>>;
 export function SetConfigValue(arg1:string,arg2:string):Promise<void>;
 
 export function SetMappingConfig(arg1:string,arg2:string):Promise<void>;
+
+export function SetupERPNextWebhooks():Promise<Record<string, any>>;
 
 export function StartBackgroundSync():Promise<Record<string, any>>;
 
@@ -60,3 +68,7 @@ export function TestERPNextConnection(arg1:string,arg2:string,arg3:string):Promi
 export function ValidateERPNextRequirements():Promise<Array<Record<string, string>>>;
 
 export function ValidateSetup(arg1:string,arg2:string,arg3:string):Promise<Array<Record<string, any>>>;
+
+export function GetAutoStartEnabled():Promise<boolean>;
+
+export function SetAutoStart(arg1:boolean):Promise<void>;

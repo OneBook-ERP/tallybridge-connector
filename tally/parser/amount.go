@@ -11,11 +11,13 @@ import (
 //
 // Tally amount formats encountered in the wild:
 //
-//	"-215476.00"     → -215476.00
-//	"215476.00 Cr"   →  -215476.00  (credit = negative in accounting convention)
-//	"215476.00 Dr"   →  +215476.00  (debit  = positive)
-//	"215476.00-"     →  -215476.00  (trailing minus)
-//	""               →   0.0
+//	"-215476.00"           → -215476.00
+//	"215476.00 Cr"         →  -215476.00  (credit = negative in accounting convention)
+//	"215476.00 Dr"         →  +215476.00  (debit  = positive)
+//	"215476.00-"           →  -215476.00  (trailing minus)
+//	"(-) 17,600.000 KGS"   →  -17600.0   (stock qty negative with UOM suffix)
+//	"17,600.000 KGS"       →  +17600.0   (stock qty with UOM suffix)
+//	""                     →   0.0
 func ParseAmount(s string) float64 {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -23,6 +25,12 @@ func ParseAmount(s string) float64 {
 	}
 
 	negate := false
+
+	// Tally stock qty negative format: "(-) 17,600.000 KGS"
+	if strings.HasPrefix(s, "(-)") {
+		negate = true
+		s = strings.TrimSpace(strings.TrimPrefix(s, "(-)"))
+	}
 
 	// Suffix " Cr" → credit, which Tally represents as a positive balance
 	// but we store as negative (liability/income convention).
@@ -38,6 +46,15 @@ func ParseAmount(s string) float64 {
 		negate = true
 		s = strings.TrimSuffix(s, "-")
 	}
+
+	// Strip UOM suffix (e.g., "17600.000 KGS" → "17600.000").
+	// Tally appends the unit of measure after a space for stock quantities.
+	if idx := strings.IndexByte(s, ' '); idx != -1 {
+		s = s[:idx]
+	}
+
+	// Strip thousands-separator commas (e.g., "17,600.000" → "17600.000").
+	s = strings.ReplaceAll(s, ",", "")
 
 	s = strings.TrimSpace(s)
 	f, err := strconv.ParseFloat(s, 64)

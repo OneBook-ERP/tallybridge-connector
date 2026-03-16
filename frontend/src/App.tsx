@@ -7,6 +7,9 @@ import {
     ValidateSetup, CreateERPNextFiscalYear, SaveERPNextMapping,
     GetMappingConfig, SetMappingConfig, GetMappingDefaults, DataQualityScan,
     GetServiceStatus, GetSyncStats, SyncNow, GetAllConfig, SetConfigValue,
+    FetchAPITokenViaLogin, CreateERPNextCustomFields,
+    SaveERPNextSettings, SetupERPNextWebhooks,
+    GetAutoStartEnabled, SetAutoStart,
 } from '../wailsjs/go/main/App'
 import { Card, CardHeader, CardTitle, CardContent } from './components/ui/card'
 import { Badge } from './components/ui/badge'
@@ -75,7 +78,7 @@ function SetupWizard({ onActivated }: { onActivated: (r: ActivationResult) => vo
     const [step, setStep] = useState(1)
 
     // Step 2
-    const [tallyUrl, setTallyUrl] = useState('http://192.168.1.10:9000')
+    const [tallyUrl, setTallyUrl] = useState('http://192.168.1.12:9000')
     const [tallyOnline, setTallyOnline] = useState(false)
     const [isScanning, setIsScanning] = useState(false)
 
@@ -93,8 +96,17 @@ function SetupWizard({ onActivated }: { onActivated: (r: ActivationResult) => vo
     const [apiKey, setApiKey] = useState('2015ad50ead346b')
     const [apiSecret, setApiSecret] = useState('fde5d28a4c3dbe1')
     const [cloudUrl, setCloudUrl] = useState('http://localhost:3000')
+    const [companyGstin, setCompanyGstin] = useState('')
+    const [defaultWarehouse, setDefaultWarehouse] = useState('')
+    const [defaultCostCenter, setDefaultCostCenter] = useState('')
     const [isTestingErp, setIsTestingErp] = useState(false)
     const [erpConnectionError, setErpConnectionError] = useState('')
+    // OAuth login helper (step 4)
+    const [oauthUsername, setOauthUsername] = useState('')
+    const [oauthPassword, setOauthPassword] = useState('')
+    const [oauthLoading, setOauthLoading] = useState(false)
+    const [oauthError, setOauthError] = useState('')
+    const [oauthSuccess, setOauthSuccess] = useState(false)
 
     // Step 5 — ERPNext company + fiscal year selection
     const [erpCompanies, setErpCompanies] = useState<string[]>([])
@@ -108,6 +120,10 @@ function SetupWizard({ onActivated }: { onActivated: (r: ActivationResult) => vo
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [validationResults, setValidationResults] = useState<any[]>([])
     const [validating, setValidating] = useState(false)
+    const [customFieldsLoading, setCustomFieldsLoading] = useState(false)
+    const [customFieldsResult, setCustomFieldsResult] = useState<{ created: number; skipped: number; errors: number; details: string } | null>(null)
+    const [webhooksLoading, setWebhooksLoading] = useState(false)
+    const [webhooksResult, setWebhooksResult] = useState<{ created: number; skipped: number; errors: number; details: string } | null>(null)
 
     // Step 7 — Voucher type mapping
     const [tallyVTypes, setTallyVTypes] = useState<{ name: string; nature: string }[]>([])
@@ -307,6 +323,7 @@ function SetupWizard({ onActivated }: { onActivated: (r: ActivationResult) => vo
                     return
                 }
                 await SaveConfig(erpnextUrl, apiKey, apiSecret, selectedCompany || '', cloudUrl)
+                await SaveERPNextSettings(companyGstin, defaultWarehouse, defaultCostCenter)
             } catch (e) {
                 setErpConnectionError(String(e))
                 setIsTestingErp(false)
@@ -363,7 +380,8 @@ function SetupWizard({ onActivated }: { onActivated: (r: ActivationResult) => vo
 
     // ── Can proceed? ──
     const canNext = () => {
-        if (isTestingErp || isActivating || activateStatus === 'done') return false
+        if (isTestingErp || isActivating) return false
+        if (step === 10 && activateStatus === 'done') return false
         if (step === 2 && !tallyOnline) return false
         if (step === 3 && (!selectedCompany || !syncFromDate || !syncToDate)) return false
         if (step === 5 && (!selectedErpCompany || step5Loading)) return false
@@ -499,6 +517,41 @@ function SetupWizard({ onActivated }: { onActivated: (r: ActivationResult) => vo
                                     </div>
                                     <Field label="TallyBridge Cloud URL" type="url" mono value={cloudUrl} onChange={setCloudUrl} disabled={isTestingErp}
                                         hint="Middleware server (default: http://localhost:3000)" />
+                                    <div className="grid grid-cols-3 gap-3">
+                                        <Field label="Company GSTIN" type="text" mono value={companyGstin} onChange={setCompanyGstin} disabled={isTestingErp}
+                                            hint="15-char GST number" />
+                                        <Field label="Default Warehouse" type="text" value={defaultWarehouse} onChange={setDefaultWarehouse} disabled={isTestingErp}
+                                            hint="e.g. Stores - CPT" />
+                                        <Field label="Default Cost Center" type="text" value={defaultCostCenter} onChange={setDefaultCostCenter} disabled={isTestingErp}
+                                            hint="e.g. Main - CPT" />
+                                    </div>
+                                </div>
+                                {/* OAuth login helper */}
+                                <div className="border border-dashed border-blue-200 rounded-xl p-4 space-y-3 bg-blue-50/40">
+                                    <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide">Get Token via OAuth Login</p>
+                                    <p className="text-xs text-neutral-500">Enter your ERPNext credentials to auto-generate an API key — no need to copy tokens manually.</p>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <Field label="Username / Email" type="text" value={oauthUsername} onChange={setOauthUsername} disabled={oauthLoading} />
+                                        <Field label="Password" type="password" value={oauthPassword} onChange={setOauthPassword} disabled={oauthLoading} />
+                                    </div>
+                                    {oauthError && <ErrorBox msg={oauthError} />}
+                                    {oauthSuccess && <div className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">Token fetched — API Key and Secret filled above.</div>}
+                                    <Button size="sm" disabled={oauthLoading || !oauthUsername || !oauthPassword} onClick={async () => {
+                                        setOauthLoading(true); setOauthError(''); setOauthSuccess(false)
+                                        try {
+                                            const res = await FetchAPITokenViaLogin(erpnextUrl, oauthUsername, oauthPassword)
+                                            if (res.status === 'ok') {
+                                                setApiKey(res.apiKey as string)
+                                                setApiSecret(res.apiSecret as string)
+                                                setOauthSuccess(true)
+                                            } else {
+                                                setOauthError(res.message as string)
+                                            }
+                                        } catch (e) { setOauthError(String(e)) }
+                                        setOauthLoading(false)
+                                    }}>
+                                        {oauthLoading ? 'Fetching…' : 'Fetch Token'}
+                                    </Button>
                                 </div>
                             </div>
                         )}
@@ -560,10 +613,50 @@ function SetupWizard({ onActivated }: { onActivated: (r: ActivationResult) => vo
                             <div className="space-y-4">
                                 <div className="flex items-center justify-between">
                                     <h2 className="text-2xl font-bold">Validate Setup</h2>
-                                    <Button size="sm" variant="outline" onClick={runValidation} disabled={validating}>
-                                        {validating ? 'Running…' : '↻ Re-check'}
-                                    </Button>
+                                    <div className="flex gap-2">
+                                        <Button size="sm" variant="outline" disabled={customFieldsLoading} onClick={async () => {
+                                            setCustomFieldsLoading(true); setCustomFieldsResult(null)
+                                            try {
+                                                const res = await CreateERPNextCustomFields()
+                                                setCustomFieldsResult({ created: res.created as number, skipped: res.skipped as number, errors: res.errors as number, details: res.details as string })
+                                            } catch (e) {
+                                                setCustomFieldsResult({ created: 0, skipped: 0, errors: 1, details: String(e) })
+                                            }
+                                            setCustomFieldsLoading(false)
+                                        }}>
+                                            {customFieldsLoading ? 'Adding…' : 'Add Custom Fields'}
+                                        </Button>
+                                        <Button size="sm" variant="outline" disabled={webhooksLoading} onClick={async () => {
+                                            setWebhooksLoading(true); setWebhooksResult(null)
+                                            try {
+                                                const res = await SetupERPNextWebhooks()
+                                                setWebhooksResult({ created: res.created as number, skipped: res.skipped as number, errors: res.errors as number, details: res.details as string })
+                                            } catch (e) {
+                                                setWebhooksResult({ created: 0, skipped: 0, errors: 1, details: String(e) })
+                                            }
+                                            setWebhooksLoading(false)
+                                        }}>
+                                            {webhooksLoading ? 'Setting up…' : 'Setup Webhooks'}
+                                        </Button>
+                                        <Button size="sm" variant="outline" onClick={runValidation} disabled={validating}>
+                                            {validating ? 'Running…' : '↻ Re-check'}
+                                        </Button>
+                                    </div>
                                 </div>
+                                {customFieldsResult && (
+                                    <div className={`text-xs px-3 py-2 rounded-lg border ${customFieldsResult.errors > 0 ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}`}>
+                                        {customFieldsResult.errors > 0
+                                            ? `${customFieldsResult.errors} error(s): ${customFieldsResult.details}`
+                                            : `Done — ${customFieldsResult.created} created, ${customFieldsResult.skipped} already existed.`}
+                                    </div>
+                                )}
+                                {webhooksResult && (
+                                    <div className={`text-xs px-3 py-2 rounded-lg border ${webhooksResult.errors > 0 ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}`}>
+                                        {webhooksResult.errors > 0
+                                            ? `${webhooksResult.errors} error(s): ${webhooksResult.details}`
+                                            : `Done — ${webhooksResult.created} created, ${webhooksResult.skipped} already existed.`}
+                                    </div>
+                                )}
                                 {validating ? <Spinner label="Checking ERPNext environment…" /> : (
                                     <div className="space-y-2">
                                         {validationResults.map((item, i) => (
@@ -871,7 +964,7 @@ function OverviewTab({ result }: { result: ActivationResult }) {
 
     const formatTS = (ts: string) => {
         if (!ts || ts.length < 14) return '—'
-        return `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)} ${ts.slice(8,10)}:${ts.slice(10,12)}`
+        return `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)} ${ts.slice(8, 10)}:${ts.slice(10, 12)}`
     }
 
     const tallyHeartbeatCompany = (services.tally as { company?: string })?.company || ''
@@ -1205,13 +1298,20 @@ function SettingsTab({ result }: { result: ActivationResult }) {
     const [editing, setEditing] = useState<Record<string, string>>({})
     const [saved, setSaved] = useState<Record<string, boolean>>({})
     const [loading, setLoading] = useState(true)
+    const [autoStart, setAutoStart] = useState(false)
 
     useEffect(() => {
-        GetAllConfig().then(cfg => {
-            setConfig(cfg as Record<string, string>)
-            setLoading(false)
-        }).catch(() => setLoading(false))
+        Promise.all([
+            GetAllConfig().then(cfg => setConfig(cfg as Record<string, string>)),
+            GetAutoStartEnabled().then(setAutoStart),
+        ]).finally(() => setLoading(false))
     }, [result])
+
+    const handleAutoStartToggle = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const enabled = e.target.checked
+        await SetAutoStart(enabled)
+        setAutoStart(enabled)
+    }
 
     type SettingGroup = { title: string; keys: string[]; labels: Record<string, string>; editable: Record<string, boolean>; mask?: Record<string, boolean> }
     const SETTING_GROUPS: SettingGroup[] = [
@@ -1308,6 +1408,21 @@ function SettingsTab({ result }: { result: ActivationResult }) {
                     </CardContent>
                 </Card>
             ))}
+
+            <Card>
+                <CardHeader><CardTitle>Startup</CardTitle></CardHeader>
+                <CardContent>
+                    <label className="flex items-center justify-between text-sm cursor-pointer">
+                        <span className="text-neutral-700">Run at Windows startup</span>
+                        <input
+                            type="checkbox"
+                            className="w-4 h-4 accent-blue-600"
+                            checked={autoStart}
+                            onChange={handleAutoStartToggle}
+                        />
+                    </label>
+                </CardContent>
+            </Card>
 
             <Card>
                 <CardHeader><CardTitle>About</CardTitle></CardHeader>

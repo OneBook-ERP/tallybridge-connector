@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
 INSERT OR IGNORE INTO sync_state (collection) VALUES ('vouchers');
 INSERT OR IGNORE INTO sync_state (collection) VALUES ('ledgers');
 INSERT OR IGNORE INTO sync_state (collection) VALUES ('stock_items');
+INSERT OR IGNORE INTO sync_state (collection) VALUES ('masters');
 
 CREATE TABLE IF NOT EXISTS job_queue (
     id           TEXT PRIMARY KEY,          -- UUID

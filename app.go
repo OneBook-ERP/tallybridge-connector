@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	tbsync "github.com/tallybridge/connector/sync"
@@ -129,6 +131,110 @@ func (a *App) SaveConfig(erpUrl, apiKey, apiSecret, company, cloudURL string) er
 	return nil
 }
 
+// SaveERPNextSettings persists additional ERPNext configuration (GSTIN, warehouse, cost center).
+// These are optional but needed for opening stock, journal entries, and GST inter-state detection.
+func (a *App) SaveERPNextSettings(gstin, warehouse, costCenter string) error {
+	if gstin != "" {
+		_ = a.db.SetConfig("erpnext_gstin", gstin)
+	}
+	if warehouse != "" {
+		_ = a.db.SetConfig("erpnext_warehouse", warehouse)
+	}
+	if costCenter != "" {
+		_ = a.db.SetConfig("erpnext_cost_center", costCenter)
+	}
+	return nil
+}
+
+// SetupERPNextWebhooks creates TallyBridge webhooks in ERPNext for the on_submit and
+// on_cancel events of Sales Invoice, Purchase Invoice, Payment Entry, and Journal Entry.
+// Webhooks post to {cloudUrl}/webhook/erpnext. Skips doctypes that already have a
+// TallyBridge webhook. Returns counts of created, skipped, and errored webhooks.
+func (a *App) SetupERPNextWebhooks() map[string]interface{} {
+	cloudURL := a.db.GetConfig("cloud_url")
+	if cloudURL == "" {
+		return map[string]interface{}{"status": "error", "message": "Cloud URL not configured — complete setup first"}
+	}
+	webhookURL := strings.TrimRight(cloudURL, "/") + "/webhook/erpnext"
+
+	type webhookSpec struct {
+		Doctype string
+		Event   string
+	}
+	specs := []webhookSpec{
+		{"Sales Invoice", "on_submit"},
+		{"Sales Invoice", "on_cancel"},
+		{"Purchase Invoice", "on_submit"},
+		{"Purchase Invoice", "on_cancel"},
+		{"Payment Entry", "on_submit"},
+		{"Payment Entry", "on_cancel"},
+		{"Journal Entry", "on_submit"},
+		{"Journal Entry", "on_cancel"},
+	}
+
+	created, skipped, errCount := 0, 0, 0
+	var errMsgs []string
+
+	for _, spec := range specs {
+		// Check if a webhook for this doctype+event already points to our URL
+		checkPath := fmt.Sprintf(
+			`/api/resource/Webhook?filters=[[%%22webhook_doctype%%22,%%22=%%22,%%22%s%%22],[%%22webhook_docevent%%22,%%22=%%22,%%22%s%%22],[%%22request_url%%22,%%22like%%22,%%22%%25/webhook/erpnext%%25%%22]]&fields=[%%22name%%22]&limit=1`,
+			url.QueryEscape(spec.Doctype), url.QueryEscape(spec.Event),
+		)
+		existData, existStatus, _ := a.erpCall("GET", checkPath, nil)
+		if existStatus == 200 {
+			var existResp struct {
+				Data []struct{ Name string `json:"name"` } `json:"data"`
+			}
+			if json.Unmarshal(existData, &existResp) == nil && len(existResp.Data) > 0 {
+				skipped++
+				continue
+			}
+		}
+
+		webhookName := fmt.Sprintf("TALLYBRIDGE-%s-%s", strings.ReplaceAll(spec.Doctype, " ", "-"), spec.Event)
+		body := map[string]interface{}{
+			"doctype":           "Webhook",
+			"name":              webhookName,
+			"webhook_doctype":   spec.Doctype,
+			"webhook_docevent":  spec.Event,
+			"request_url":       webhookURL,
+			"request_structure": "Form URL-Encoded",
+			"enabled":           1,
+			// Use .get() to avoid AttributeError if custom field missing during validation
+			"condition": "doc.get('custom_sync_source') != 'TALLYBRIDGE'",
+		}
+		respData, status, err := a.erpCall("POST", "/api/resource/Webhook", body)
+		if err != nil {
+			errCount++
+			errMsgs = append(errMsgs, fmt.Sprintf("%s %s: %v", spec.Doctype, spec.Event, err))
+		} else if status == 200 || status == 201 {
+			created++
+		} else {
+			errCount++
+			snippet := string(respData)
+			if len(snippet) > 200 {
+				snippet = snippet[:200]
+			}
+			errMsgs = append(errMsgs, fmt.Sprintf("%s %s: HTTP %d — %s", spec.Doctype, spec.Event, status, snippet))
+		}
+	}
+
+	status := "ok"
+	if errCount > 0 && created == 0 {
+		status = "error"
+	} else if errCount > 0 {
+		status = "partial"
+	}
+	return map[string]interface{}{
+		"status":  status,
+		"created": created,
+		"skipped": skipped,
+		"errors":  errCount,
+		"details": strings.Join(errMsgs, "\n"),
+	}
+}
+
 // TestERPNextConnection tests the ERPNext API credentials locally from the connector
 func (a *App) TestERPNextConnection(erpUrl, apiKey, apiSecret string) map[string]interface{} {
 	url := fmt.Sprintf("%s/api/method/frappe.auth.get_logged_user", erpUrl)
@@ -196,7 +302,7 @@ func (a *App) DataQualityScan(company string) map[string]interface{} {
 		result["missingGSTIN"] = missingGSTIN
 	}
 
-	items, err := reader.ListStockItems(a.ctx, a.tallyClient, company)
+	items, err := reader.ListStockItems(a.ctx, a.tallyClient, company, time.Time{}, time.Time{})
 	if err != nil {
 		fmt.Printf("[DataQualityScan] ListStockItems error: %v\n", err)
 	} else {
@@ -490,7 +596,7 @@ func (a *App) GetTallyStockItems(company string) []map[string]interface{} {
 	if a.tallyClient == nil {
 		return nil
 	}
-	items, err := reader.ListStockItems(a.ctx, a.tallyClient, company)
+	items, err := reader.ListStockItems(a.ctx, a.tallyClient, company, time.Time{}, time.Time{})
 	if err != nil {
 		fmt.Printf("[GetTallyStockItems] error: %v\n", err)
 		return nil
@@ -817,14 +923,17 @@ func (a *App) PushMappingsToCloud() error {
 	}
 
 	body := map[string]interface{}{
-		"companyId":            companyID,
-		"accountMappings":      accountMappings,
-		"gstLedgerMappings":    gstMappings,
-		"voucherTypeMappings":  voucherTypeMappings,
-		"erpnextUrl":           a.db.GetConfig("erpnext_url"),
-		"erpnextApiKey":        a.db.GetConfig("erpnext_api_key"),
-		"erpnextApiSecret":     a.db.GetConfig("erpnext_api_secret"),
-		"erpnextCompany":       a.db.GetConfig("erpnext_company"),
+		"companyId":           companyID,
+		"accountMappings":     accountMappings,
+		"gstLedgerMappings":   gstMappings,
+		"voucherTypeMappings": voucherTypeMappings,
+		"erpnextUrl":          a.db.GetConfig("erpnext_url"),
+		"erpnextApiKey":       a.db.GetConfig("erpnext_api_key"),
+		"erpnextApiSecret":    a.db.GetConfig("erpnext_api_secret"),
+		"erpnextCompany":      a.db.GetConfig("erpnext_company"),
+		"erpnextGstin":        a.db.GetConfig("erpnext_gstin"),
+		"erpnextWarehouse":    a.db.GetConfig("erpnext_warehouse"),
+		"erpnextCostCenter":   a.db.GetConfig("erpnext_cost_center"),
 	}
 
 	payload, err := json.Marshal(body)
@@ -1006,4 +1115,161 @@ func (a *App) GetMappingDefaults(section string) string {
 		return `{"maxRetries":3,"retryDelayMinutes":15,"notifyOnException":false,"exceptionWebhookUrl":"","skipAfterMaxRetries":true,"logLevel":"warn"}`
 	}
 	return "{}"
+}
+
+// FetchAPITokenViaLogin logs into ERPNext with username+password, generates an API key
+// for that user (if not already generated), and returns the key+secret.
+func (a *App) FetchAPITokenViaLogin(erpUrl, username, password string) map[string]interface{} {
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Timeout: 15 * time.Second, Jar: jar}
+
+	// Step 1: login
+	loginURL := strings.TrimRight(erpUrl, "/") + "/api/method/login"
+	form := url.Values{"usr": {username}, "pwd": {password}}
+	resp, err := client.PostForm(loginURL, form)
+	if err != nil {
+		return map[string]interface{}{"status": "error", "message": "Login request failed: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return map[string]interface{}{"status": "error", "message": fmt.Sprintf("Login failed (HTTP %d): %s", resp.StatusCode, string(body))}
+	}
+
+	// Step 2: generate (or retrieve) API key for this user
+	genURL := strings.TrimRight(erpUrl, "/") + "/api/method/frappe.core.doctype.user.user.generate_keys?user=" + url.QueryEscape(username)
+	req2, _ := http.NewRequest("POST", genURL, nil)
+	req2.Header.Set("X-Frappe-CSRF-Token", "fetch") // Frappe accepts "fetch" as CSRF bypass for same-origin
+	resp2, err := client.Do(req2)
+	if err != nil {
+		return map[string]interface{}{"status": "error", "message": "Generate keys request failed: " + err.Error()}
+	}
+	defer resp2.Body.Close()
+	body2, _ := io.ReadAll(resp2.Body)
+	if resp2.StatusCode != 200 {
+		return map[string]interface{}{"status": "error", "message": fmt.Sprintf("Generate keys failed (HTTP %d): %s", resp2.StatusCode, string(body2))}
+	}
+
+	// Parse {"message": {"api_secret": "...", "api_key": "..."}}
+	var parsed struct {
+		Message struct {
+			APIKey    string `json:"api_key"`
+			APISecret string `json:"api_secret"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(body2, &parsed); err != nil || parsed.Message.APIKey == "" {
+		// api_key may already exist and not be returned — fetch it from User doc
+		docURL := strings.TrimRight(erpUrl, "/") + "/api/resource/User/" + url.QueryEscape(username)
+		req3, _ := http.NewRequest("GET", docURL, nil)
+		resp3, err := client.Do(req3)
+		if err != nil {
+			return map[string]interface{}{"status": "error", "message": "Could not fetch user doc: " + err.Error()}
+		}
+		defer resp3.Body.Close()
+		body3, _ := io.ReadAll(resp3.Body)
+		var doc struct {
+			Data struct {
+				APIKey    string `json:"api_key"`
+				APISecret string `json:"api_secret"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(body3, &doc); err != nil || doc.Data.APIKey == "" {
+			return map[string]interface{}{"status": "error", "message": "Could not read API key from User doc. Try manual entry."}
+		}
+		return map[string]interface{}{"status": "ok", "apiKey": doc.Data.APIKey, "apiSecret": doc.Data.APISecret}
+	}
+
+	return map[string]interface{}{"status": "ok", "apiKey": parsed.Message.APIKey, "apiSecret": parsed.Message.APISecret}
+}
+
+// CreateERPNextCustomFields creates the TallyBridge custom fields on ERPNext doctypes.
+// Idempotent — skips fields that already exist.
+func (a *App) CreateERPNextCustomFields() map[string]interface{} {
+	type fieldDef struct {
+		DT         string `json:"dt"`
+		Fieldname  string `json:"fieldname"`
+		Label      string `json:"label"`
+		Fieldtype  string `json:"fieldtype"`
+		InsertAfter string `json:"insert_after"`
+		ReadOnly   int    `json:"read_only"`
+		NoCopy     int    `json:"no_copy"`
+		Unique     int    `json:"unique,omitempty"`
+		InFilter   int    `json:"in_filter,omitempty"`
+		SearchIndex int   `json:"search_index,omitempty"`
+	}
+
+	allDTs := []string{"Sales Invoice", "Purchase Invoice", "Journal Entry", "Payment Entry", "Item", "Customer", "Supplier"}
+	txnDTs := []string{"Sales Invoice", "Purchase Invoice", "Journal Entry", "Payment Entry"}
+
+	var fields []fieldDef
+	for _, dt := range allDTs {
+		fields = append(fields, fieldDef{DT: dt, Fieldname: "custom_tally_guid", Label: "Tally GUID", Fieldtype: "Data", InsertAfter: "naming_series", ReadOnly: 1, NoCopy: 1, Unique: 1, InFilter: 1, SearchIndex: 1})
+		fields = append(fields, fieldDef{DT: dt, Fieldname: "custom_sync_source", Label: "Sync Source", Fieldtype: "Data", InsertAfter: "custom_tally_guid", ReadOnly: 1, NoCopy: 1})
+	}
+	for _, dt := range txnDTs {
+		fields = append(fields, fieldDef{DT: dt, Fieldname: "custom_tally_voucher_number", Label: "Tally Voucher Number", Fieldtype: "Data", InsertAfter: "custom_sync_source", ReadOnly: 1, NoCopy: 1})
+	}
+
+	created, skipped, errCount := 0, 0, 0
+	var errMsgs []string
+
+	for _, f := range fields {
+		body, _ := json.Marshal(f)
+		data, status, err := a.erpCallRaw("POST", "/api/resource/Custom%20Field", body)
+		if err != nil {
+			errCount++
+			errMsgs = append(errMsgs, f.DT+"."+f.Fieldname+": "+err.Error())
+			continue
+		}
+		resp := string(data)
+		if status == 200 && strings.Contains(resp, `"name"`) {
+			created++
+		} else if strings.Contains(resp, "DuplicateEntryError") || strings.Contains(resp, "already exists") {
+			skipped++
+		} else {
+			errCount++
+			if len(resp) > 120 {
+				resp = resp[:120]
+			}
+			errMsgs = append(errMsgs, f.DT+"."+f.Fieldname+": "+resp)
+		}
+	}
+
+	return map[string]interface{}{
+		"status":  "ok",
+		"created": created,
+		"skipped": skipped,
+		"errors":  errCount,
+		"details": strings.Join(errMsgs, "\n"),
+	}
+}
+
+// erpCallRaw is like erpCall but accepts a raw []byte body (already marshalled).
+func (a *App) erpCallRaw(method, path string, body []byte) ([]byte, int, error) {
+	erpURL := a.db.GetConfig("erpnext_url")
+	apiKey := a.db.GetConfig("erpnext_api_key")
+	apiSecret := a.db.GetConfig("erpnext_api_secret")
+	if erpURL == "" {
+		return nil, 0, fmt.Errorf("ERPNext URL not configured")
+	}
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(a.ctx, method, erpURL+path, reqBody)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("token %s:%s", apiKey, apiSecret))
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	cl := &http.Client{Timeout: 15 * time.Second}
+	resp, err := cl.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return data, resp.StatusCode, nil
 }

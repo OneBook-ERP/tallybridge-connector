@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"embed"
-	"fmt"
 	"log"
 	"time"
 
@@ -29,13 +28,13 @@ func main() {
 	// 2. Initialize Tally Client
 	tclient := tally.NewClient(
 		tally.WithTimeout(30*time.Second),
-		tally.WithAddr("http://192.168.1.10:9000"),
+		tally.WithAddr("http://192.168.1.12:9000"),
 	)
 
 	// Create an instance of the app structure
 	app := NewApp(db, tclient)
 
-	fmt.Println("Starting TallyBridge Connector UI...")
+	log.Println("Starting TallyBridge Connector UI...")
 
 	// Create application with options
 	err = wails.Run(&options.App{
@@ -62,6 +61,6 @@ func main() {
 	})
 
 	if err != nil {
-		println("Error:", err.Error())
+		log.Printf("Wails run error: %v", err)
 	}
 }
