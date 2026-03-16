@@ -24,7 +24,7 @@ cd frontend && npm install && npm run build && cd "$PROJ_DIR"
 # Compile Windows resource file (icon.ico → resource.syso embedded in .exe)
 # go build automatically picks up any *.syso file in the package directory.
 echo "=== Compiling Windows resources (icon) ==="
-zig rc -o resource_windows.syso resource.rc
+zig rc /fo resource_windows.syso resource.rc
 echo "  resource_windows.syso generated"
 
 build_target() {
