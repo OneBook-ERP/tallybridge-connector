@@ -205,12 +205,13 @@ func (a *App) SetupERPNextWebhooks() map[string]interface{} {
 			"condition": "doc.get('custom_sync_source') != 'TALLYBRIDGE'",
 		}
 		respData, status, err := a.erpCall("POST", "/api/resource/Webhook", body)
-		if err != nil {
+		switch {
+		case err != nil:
 			errCount++
 			errMsgs = append(errMsgs, fmt.Sprintf("%s %s: %v", spec.Doctype, spec.Event, err))
-		} else if status == 200 || status == 201 {
+		case status == 200 || status == 201:
 			created++
-		} else {
+		default:
 			errCount++
 			snippet := string(respData)
 			if len(snippet) > 200 {
@@ -1222,11 +1223,12 @@ func (a *App) CreateERPNextCustomFields() map[string]interface{} {
 			continue
 		}
 		resp := string(data)
-		if status == 200 && strings.Contains(resp, `"name"`) {
+		switch {
+		case status == 200 && strings.Contains(resp, `"name"`):
 			created++
-		} else if strings.Contains(resp, "DuplicateEntryError") || strings.Contains(resp, "already exists") {
+		case strings.Contains(resp, "DuplicateEntryError") || strings.Contains(resp, "already exists"):
 			skipped++
-		} else {
+		default:
 			errCount++
 			if len(resp) > 120 {
 				resp = resp[:120]
