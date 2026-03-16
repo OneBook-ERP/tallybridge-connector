@@ -53,11 +53,11 @@ DefaultDirName={autopf}\TallyBridge
 DefaultGroupName=TallyBridge
 DisableProgramGroupPage=yes
 
-; Output — relative to the repo root (ISS file is at build\installer\)
-OutputDir=..\..\dist
-OutputBaseFilename=tallybridge-connector-setup-{#AppVersion}{#ArchSuffix}
-; Source files root (repo root)
+; SourceDir is the repo root; all relative paths (OutputDir, Source files, icons)
+; are resolved relative to SourceDir.
 SourceDir=..\..
+OutputDir=dist
+OutputBaseFilename=tallybridge-connector-setup-{#AppVersion}{#ArchSuffix}
 
 ; Appearance
 SetupIconFile=build\windows\icon.ico
