@@ -72,3 +72,13 @@ export function ValidateSetup(arg1:string,arg2:string,arg3:string):Promise<Array
 export function GetAutoStartEnabled():Promise<boolean>;
 
 export function SetAutoStart(arg1:boolean):Promise<void>;
+
+export function CheckForUpdate():Promise<Record<string, any>>;
+
+export function GetDiagnostics():Promise<Record<string, any>>;
+
+export function GetSyncExceptions(arg1:number):Promise<Array<Record<string, any>>>;
+
+export function GetSyncHistory(arg1:number):Promise<Array<Record<string, any>>>;
+
+export function ReprocessException(arg1:string):Promise<Record<string, any>>;

@@ -58,6 +58,9 @@ func (a *App) erpCall(method, path string, body interface{}) ([]byte, int, error
 	return data, resp.StatusCode, nil
 }
 
+// Version is set at build time via -ldflags "-X main.Version=x.y.z". Defaults to "dev".
+var Version = "dev"
+
 // App struct
 type App struct {
 	ctx         context.Context
@@ -260,14 +263,68 @@ func (a *App) TestERPNextConnection(erpUrl, apiKey, apiSecret string) map[string
 	return map[string]interface{}{"status": "ok", "message": "Connection successful"}
 }
 
-// ValidateERPNextRequirements mimics checking ERPNext for required DocTypes/Apps
+// ValidateERPNextRequirements checks ERPNext for required apps, custom fields, and tax templates.
 func (a *App) ValidateERPNextRequirements() []map[string]string {
-	return []map[string]string{
-		{"label": "India Compliance App Installed", "status": "ok"},
-		{"label": "Chart of Accounts configured", "status": "ok"},
-		{"label": "Taxes and Charges Templates exist", "status": "ok"},
-		{"label": "TallyBridge Custom Fields exist", "status": "ok"},
+	checks := []map[string]string{}
+	add := func(label, status string) {
+		checks = append(checks, map[string]string{"label": label, "status": status})
 	}
+
+	// India Compliance
+	_, icStatus, _ := a.erpCall("GET", `/api/resource/DocType/GST Settings`, nil)
+	if icStatus == 200 || icStatus == 403 {
+		add("India Compliance App Installed", "ok")
+	} else {
+		add("India Compliance App Installed", "warn")
+	}
+
+	// Chart of Accounts
+	erpCompany := a.db.GetConfig("erpnext_company")
+	if erpCompany != "" {
+		coaData, coaStatus, _ := a.erpCall("GET", fmt.Sprintf(`/api/resource/Company/%s?fields=["chart_of_accounts"]`, erpCompany), nil)
+		if coaStatus == 200 {
+			var coaResp struct {
+				Data struct{ ChartOfAccounts string `json:"chart_of_accounts"` } `json:"data"`
+			}
+			if json.Unmarshal(coaData, &coaResp) == nil && coaResp.Data.ChartOfAccounts != "" {
+				add("Chart of Accounts configured", "ok")
+			} else {
+				add("Chart of Accounts configured", "warn")
+			}
+		} else {
+			add("Chart of Accounts configured", "warn")
+		}
+	} else {
+		add("Chart of Accounts configured", "warn")
+	}
+
+	// Taxes and Charges Templates
+	taxData, taxStatus, _ := a.erpCall("GET", `/api/resource/Sales Taxes and Charges Template?limit=1`, nil)
+	if taxStatus == 200 {
+		var taxResp struct{ Data []interface{} `json:"data"` }
+		if json.Unmarshal(taxData, &taxResp) == nil && len(taxResp.Data) > 0 {
+			add("Taxes and Charges Templates exist", "ok")
+		} else {
+			add("Taxes and Charges Templates exist", "warn")
+		}
+	} else {
+		add("Taxes and Charges Templates exist", "warn")
+	}
+
+	// TallyBridge Custom Fields
+	cfData, cfStatus, _ := a.erpCall("GET", `/api/resource/Custom Field?filters=[["dt","=","Sales Invoice"],["fieldname","=","custom_tally_guid"]]&limit=1`, nil)
+	if cfStatus == 200 {
+		var cfResp struct{ Data []struct{ Name string `json:"name"` } `json:"data"` }
+		if json.Unmarshal(cfData, &cfResp) == nil && len(cfResp.Data) > 0 {
+			add("TallyBridge Custom Fields exist", "ok")
+		} else {
+			add("TallyBridge Custom Fields exist", "warn")
+		}
+	} else {
+		add("TallyBridge Custom Fields exist", "warn")
+	}
+
+	return checks
 }
 
 // DataQualityScan checks Tally data quality across ledgers and stock items.
@@ -1274,4 +1331,202 @@ func (a *App) erpCallRaw(method, path string, body []byte) ([]byte, int, error) 
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	return data, resp.StatusCode, nil
+}
+
+// cloudCall makes an authenticated HTTP call to the cloud platform.
+func (a *App) cloudCall(method, path string, body interface{}) ([]byte, int, error) {
+	cloudURL := a.db.GetConfig("cloud_url")
+	token := a.db.GetConfig("machine_token")
+	if cloudURL == "" {
+		return nil, 0, fmt.Errorf("cloud URL not configured")
+	}
+	var reqBody io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, 0, err
+		}
+		reqBody = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(a.ctx, method, cloudURL+path, reqBody)
+	if err != nil {
+		return nil, 0, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	cl := &http.Client{Timeout: 10 * time.Second}
+	resp, err := cl.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return data, resp.StatusCode, nil
+}
+
+// GetSyncExceptions fetches recent sync exceptions from the cloud platform.
+func (a *App) GetSyncExceptions(limit int) []map[string]interface{} {
+	companyID := a.db.GetConfig("company_id")
+	if companyID == "" {
+		return []map[string]interface{}{}
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	path := fmt.Sprintf("/api/dashboard/exceptions?companyId=%s&limit=%d", url.QueryEscape(companyID), limit)
+	data, status, err := a.cloudCall("GET", path, nil)
+	if err != nil || status != 200 {
+		return []map[string]interface{}{}
+	}
+	var resp struct {
+		Exceptions []map[string]interface{} `json:"exceptions"`
+	}
+	if json.Unmarshal(data, &resp) != nil || resp.Exceptions == nil {
+		return []map[string]interface{}{}
+	}
+	return resp.Exceptions
+}
+
+// ReprocessException triggers reprocessing of a specific exception (or all if id == "all").
+func (a *App) ReprocessException(exceptionId string) map[string]interface{} {
+	companyID := a.db.GetConfig("company_id")
+	if companyID == "" {
+		return map[string]interface{}{"status": "error", "message": "Not registered with cloud"}
+	}
+	body := map[string]interface{}{"companyId": companyID}
+	if exceptionId != "" && exceptionId != "all" {
+		body["exceptionIds"] = []string{exceptionId}
+	}
+	data, status, err := a.cloudCall("POST", "/api/dashboard/reprocess-exceptions", body)
+	if err != nil {
+		return map[string]interface{}{"status": "error", "message": err.Error()}
+	}
+	if status != 200 {
+		return map[string]interface{}{"status": "error", "message": fmt.Sprintf("Cloud returned %d: %s", status, string(data))}
+	}
+	return map[string]interface{}{"status": "ok", "message": "Reprocessing triggered"}
+}
+
+// GetSyncHistory fetches recent sync records from the cloud platform.
+func (a *App) GetSyncHistory(limit int) []map[string]interface{} {
+	companyID := a.db.GetConfig("company_id")
+	if companyID == "" {
+		return []map[string]interface{}{}
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	path := fmt.Sprintf("/api/dashboard/sync-records?companyId=%s&limit=%d", url.QueryEscape(companyID), limit)
+	data, status, err := a.cloudCall("GET", path, nil)
+	if err != nil || status != 200 {
+		return []map[string]interface{}{}
+	}
+	var resp struct {
+		Records []map[string]interface{} `json:"records"`
+	}
+	if json.Unmarshal(data, &resp) != nil || resp.Records == nil {
+		return []map[string]interface{}{}
+	}
+	return resp.Records
+}
+
+// CheckForUpdate checks the GitHub releases API for a newer version of the connector.
+func (a *App) CheckForUpdate() map[string]interface{} {
+	req, err := http.NewRequestWithContext(a.ctx, "GET",
+		"https://api.github.com/repos/OneBook-ERP/tallybridge-connector/releases/latest", nil)
+	if err != nil {
+		return map[string]interface{}{"status": "error", "message": err.Error()}
+	}
+	req.Header.Set("User-Agent", "TallyBridge-Connector")
+	cl := &http.Client{Timeout: 8 * time.Second}
+	resp, err := cl.Do(req)
+	if err != nil {
+		return map[string]interface{}{"status": "error", "message": "Network error: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return map[string]interface{}{"status": "error", "message": fmt.Sprintf("GitHub returned %d", resp.StatusCode)}
+	}
+	var rel struct {
+		TagName    string `json:"tag_name"`
+		Name       string `json:"name"`
+		HTMLURL    string `json:"html_url"`
+		PreRelease bool   `json:"prerelease"`
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &rel); err != nil {
+		return map[string]interface{}{"status": "error", "message": "Parse error: " + err.Error()}
+	}
+	latestVersion := strings.TrimPrefix(rel.TagName, "v")
+	currentVersion := strings.TrimPrefix(Version, "v")
+	hasUpdate := latestVersion != "" && latestVersion != currentVersion
+	return map[string]interface{}{
+		"status":         "ok",
+		"currentVersion": currentVersion,
+		"latestVersion":  latestVersion,
+		"hasUpdate":      hasUpdate,
+		"releaseName":    rel.Name,
+		"releaseUrl":     rel.HTMLURL,
+		"prerelease":     rel.PreRelease,
+	}
+}
+
+// GetDiagnostics measures connectivity and latency to each service.
+func (a *App) GetDiagnostics() map[string]interface{} {
+	result := map[string]interface{}{}
+
+	// Tally
+	if a.tallyClient != nil {
+		start := time.Now()
+		info := reader.Heartbeat(a.ctx, a.tallyClient)
+		latency := time.Since(start).Milliseconds()
+		result["tally"] = map[string]interface{}{
+			"online":  info.Online,
+			"latency": latency,
+			"company": info.OpenCompany,
+		}
+	} else {
+		result["tally"] = map[string]interface{}{"online": false, "latency": int64(-1)}
+	}
+
+	// ERPNext
+	erpURL := a.db.GetConfig("erpnext_url")
+	if erpURL != "" {
+		start := time.Now()
+		_, status, err := a.erpCall("GET", "/api/method/frappe.auth.get_logged_user", nil)
+		latency := time.Since(start).Milliseconds()
+		result["erpnext"] = map[string]interface{}{
+			"online":  err == nil && status == 200,
+			"latency": latency,
+			"url":     erpURL,
+		}
+	} else {
+		result["erpnext"] = map[string]interface{}{"online": false, "latency": int64(-1), "url": ""}
+	}
+
+	// Cloud
+	cloudURL := a.db.GetConfig("cloud_url")
+	if cloudURL != "" {
+		start := time.Now()
+		cl := &http.Client{Timeout: 5 * time.Second}
+		resp, err := cl.Get(cloudURL + "/health")
+		latency := time.Since(start).Milliseconds()
+		cloudOnline := err == nil && resp != nil && resp.StatusCode == 200
+		if resp != nil {
+			resp.Body.Close()
+		}
+		result["cloud"] = map[string]interface{}{
+			"online":  cloudOnline,
+			"latency": latency,
+			"url":     cloudURL,
+		}
+	} else {
+		result["cloud"] = map[string]interface{}{"online": false, "latency": int64(-1), "url": ""}
+	}
+
+	return result
 }

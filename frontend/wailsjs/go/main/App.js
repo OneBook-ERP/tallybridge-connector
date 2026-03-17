@@ -145,3 +145,23 @@ export function GetAutoStartEnabled() {
 export function SetAutoStart(arg1) {
   return window['go']['main']['App']['SetAutoStart'](arg1);
 }
+
+export function CheckForUpdate() {
+  return window['go']['main']['App']['CheckForUpdate']();
+}
+
+export function GetDiagnostics() {
+  return window['go']['main']['App']['GetDiagnostics']();
+}
+
+export function GetSyncExceptions(arg1) {
+  return window['go']['main']['App']['GetSyncExceptions'](arg1);
+}
+
+export function GetSyncHistory(arg1) {
+  return window['go']['main']['App']['GetSyncHistory'](arg1);
+}
+
+export function ReprocessException(arg1) {
+  return window['go']['main']['App']['ReprocessException'](arg1);
+}

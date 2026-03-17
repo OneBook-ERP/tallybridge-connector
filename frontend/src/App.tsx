@@ -10,6 +10,8 @@ import {
     FetchAPITokenViaLogin, CreateERPNextCustomFields,
     SaveERPNextSettings, SetupERPNextWebhooks,
     GetAutoStartEnabled, SetAutoStart,
+    GetSyncExceptions, ReprocessException, GetSyncHistory,
+    CheckForUpdate, GetDiagnostics,
 } from '../wailsjs/go/main/App'
 import { Card, CardHeader, CardTitle, CardContent } from './components/ui/card'
 import { Badge } from './components/ui/badge'
@@ -25,7 +27,7 @@ interface ActivationResult {
     erpnextUrl: string
 }
 
-type DashboardTab = 'overview' | 'mappings' | 'settings'
+type DashboardTab = 'overview' | 'exceptions' | 'logs' | 'mappings' | 'settings'
 
 // ─── App Root ─────────────────────────────────────────────────────────────────
 
@@ -887,6 +889,28 @@ function SetupWizard({ onActivated }: { onActivated: (r: ActivationResult) => vo
 
 function Dashboard({ result, onAddCompany }: { result: ActivationResult; onAddCompany: () => void }) {
     const [tab, setTab] = useState<DashboardTab>('overview')
+    const [exceptionCount, setExceptionCount] = useState(0)
+    const [updateInfo, setUpdateInfo] = useState<{ hasUpdate: boolean; latestVersion: string; releaseUrl: string } | null>(null)
+
+    useEffect(() => {
+        CheckForUpdate().then(info => {
+            if (info.status === 'ok' && info.hasUpdate) {
+                setUpdateInfo({ hasUpdate: true, latestVersion: info.latestVersion as string, releaseUrl: info.releaseUrl as string })
+            }
+        }).catch(() => {})
+        GetSyncExceptions(200).then(exceptions => {
+            const open = (exceptions || []).filter(e => !e.resolved_at && e.status !== 'resolved').length
+            setExceptionCount(open)
+        }).catch(() => {})
+    }, [result])
+
+    const NAV_ITEMS: { id: DashboardTab; label: string; badge?: number }[] = [
+        { id: 'overview', label: 'Overview' },
+        { id: 'exceptions', label: 'Exceptions', badge: exceptionCount > 0 ? exceptionCount : undefined },
+        { id: 'logs', label: 'Sync Log' },
+        { id: 'mappings', label: 'Mappings' },
+        { id: 'settings', label: 'Settings' },
+    ]
 
     return (
         <div className="flex h-screen bg-neutral-50 text-neutral-900 font-sans">
@@ -897,12 +921,22 @@ function Dashboard({ result, onAddCompany }: { result: ActivationResult; onAddCo
                         <span className="w-2 h-2 rounded-full bg-green-500 inline-block animate-pulse"></span>
                         <span className="text-xs text-green-700 font-medium">Active</span>
                     </div>
+                    {updateInfo?.hasUpdate && (
+                        <button
+                            className="mt-1.5 w-full text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 text-center hover:bg-amber-100 transition-colors"
+                            onClick={() => window.open(updateInfo.releaseUrl, '_blank')}>
+                            v{updateInfo.latestVersion} available ↗
+                        </button>
+                    )}
                 </div>
                 <nav className="flex-1 p-3 space-y-0.5">
-                    {(['overview', 'mappings', 'settings'] as DashboardTab[]).map(id => (
+                    {NAV_ITEMS.map(({ id, label, badge }) => (
                         <button key={id} onClick={() => setTab(id)}
-                            className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium capitalize transition-colors ${tab === id ? 'bg-blue-50 text-blue-700' : 'text-neutral-600 hover:bg-neutral-100'}`}>
-                            {id}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-between ${tab === id ? 'bg-blue-50 text-blue-700' : 'text-neutral-600 hover:bg-neutral-100'}`}>
+                            <span>{label}</span>
+                            {badge !== undefined && badge > 0 && (
+                                <span className="text-[10px] bg-red-500 text-white rounded-full px-1.5 py-0.5 font-bold min-w-[18px] text-center leading-tight">{badge > 99 ? '99+' : badge}</span>
+                            )}
                         </button>
                     ))}
                 </nav>
@@ -914,6 +948,8 @@ function Dashboard({ result, onAddCompany }: { result: ActivationResult; onAddCo
             </div>
             <div className="flex-1 overflow-y-auto">
                 {tab === 'overview' && <OverviewTab result={result} />}
+                {tab === 'exceptions' && <ExceptionsTab onCountChange={setExceptionCount} />}
+                {tab === 'logs' && <LogsTab />}
                 {tab === 'mappings' && <MappingsTab result={result} />}
                 {tab === 'settings' && <SettingsTab result={result} />}
             </div>
@@ -929,6 +965,7 @@ function OverviewTab({ result }: { result: ActivationResult }) {
     const [loading, setLoading] = useState(true)
     const [syncing, setSyncing] = useState(false)
     const [syncMsg, setSyncMsg] = useState<{ type: 'ok' | 'error'; text: string } | null>(null)
+    const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
 
     const refresh = useCallback(async () => {
         setLoading(true)
@@ -939,9 +976,16 @@ function OverviewTab({ result }: { result: ActivationResult }) {
         setServices(svc as Record<string, { online: boolean; url?: string }>)
         setSyncStats(stats as Record<string, string>)
         setLoading(false)
+        setLastRefreshed(new Date())
     }, [])
 
     useEffect(() => { refresh() }, [refresh])
+
+    // Auto-refresh every 30 seconds
+    useEffect(() => {
+        const id = setInterval(refresh, 30_000)
+        return () => clearInterval(id)
+    }, [refresh])
 
     const runSync = async (fullSync: boolean) => {
         setSyncing(true)
@@ -973,7 +1017,10 @@ function OverviewTab({ result }: { result: ActivationResult }) {
         <div className="p-6 space-y-5 max-w-3xl">
             <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Overview</h2>
-                <Button size="sm" variant="outline" onClick={refresh} disabled={loading}>↻ Refresh</Button>
+                <div className="flex items-center gap-3">
+                    {lastRefreshed && <span className="text-xs text-neutral-400">Last updated {lastRefreshed.toLocaleTimeString()}</span>}
+                    <Button size="sm" variant="outline" onClick={refresh} disabled={loading}>↻ Refresh</Button>
+                </div>
             </div>
 
             {/* Service Status */}
@@ -1086,6 +1133,358 @@ function OverviewTab({ result }: { result: ActivationResult }) {
                 </Card>
             </div>
         </div>
+    )
+}
+
+// ─── Exceptions Tab ───────────────────────────────────────────────────────────
+
+function ExceptionsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const [exceptions, setExceptions] = useState<any[]>([])
+    const [loading, setLoading] = useState(true)
+    const [retrying, setRetrying] = useState<string | null>(null)
+    const [retryMsg, setRetryMsg] = useState<{ type: 'ok' | 'error'; text: string } | null>(null)
+    const [filterStatus, setFilterStatus] = useState<'open' | 'all' | 'resolved'>('open')
+
+    const load = useCallback(async () => {
+        setLoading(true)
+        try {
+            const data = await GetSyncExceptions(300)
+            setExceptions(data || [])
+            const open = (data || []).filter((e: Record<string, unknown>) => !e.resolved_at && e.status !== 'resolved').length
+            onCountChange(open)
+        } catch { setExceptions([]) }
+        setLoading(false)
+    }, [onCountChange])
+
+    useEffect(() => { load() }, [load])
+
+    const retry = async (id: string) => {
+        setRetrying(id)
+        setRetryMsg(null)
+        try {
+            const res = await ReprocessException(id)
+            if (res.status === 'ok') {
+                setRetryMsg({ type: 'ok', text: 'Reprocessing queued — refresh in a moment' })
+                setTimeout(load, 2500)
+            } else {
+                setRetryMsg({ type: 'error', text: res.message as string })
+            }
+        } catch (e) { setRetryMsg({ type: 'error', text: String(e) }) }
+        setRetrying(null)
+    }
+
+    const retryAll = async () => {
+        setRetrying('all')
+        setRetryMsg(null)
+        try {
+            const res = await ReprocessException('all')
+            if (res.status === 'ok') {
+                setRetryMsg({ type: 'ok', text: 'All open exceptions queued for reprocessing' })
+                setTimeout(load, 2500)
+            } else {
+                setRetryMsg({ type: 'error', text: res.message as string })
+            }
+        } catch (e) { setRetryMsg({ type: 'error', text: String(e) }) }
+        setRetrying(null)
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const filtered = exceptions.filter((e: any) => {
+        if (filterStatus === 'open') return !e.resolved_at && e.status !== 'resolved'
+        if (filterStatus === 'resolved') return !!e.resolved_at || e.status === 'resolved'
+        return true
+    })
+    const openCount = exceptions.filter((e: Record<string, unknown>) => !e.resolved_at && e.status !== 'resolved').length
+
+    return (
+        <div className="p-6 space-y-4 max-w-4xl">
+            <div className="flex items-center justify-between">
+                <div>
+                    <h2 className="text-lg font-semibold">Sync Exceptions</h2>
+                    <p className="text-xs text-neutral-400 mt-0.5">Vouchers that failed to sync — retry individually or all at once</p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <Button size="sm" variant="outline" onClick={load} disabled={loading}>↻ Refresh</Button>
+                    {openCount > 0 && (
+                        <Button size="sm" variant="outline" onClick={retryAll} disabled={retrying === 'all'}>
+                            {retrying === 'all' ? 'Retrying…' : `Retry All (${openCount})`}
+                        </Button>
+                    )}
+                </div>
+            </div>
+
+            {retryMsg && (
+                <div className={`px-3 py-2 rounded-lg text-xs ${retryMsg.type === 'ok' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-600 border border-red-200'}`}>
+                    {retryMsg.text}
+                </div>
+            )}
+
+            <div className="flex gap-2">
+                {(['open', 'all', 'resolved'] as const).map(f => (
+                    <button key={f} onClick={() => setFilterStatus(f)}
+                        className={`px-3 py-1 text-xs rounded-full font-medium border transition-colors ${filterStatus === f ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-neutral-200 text-neutral-600 hover:bg-neutral-50'}`}>
+                        {f === 'all' ? `All (${exceptions.length})` : f === 'open' ? `Open (${openCount})` : `Resolved (${exceptions.length - openCount})`}
+                    </button>
+                ))}
+            </div>
+
+            {loading ? (
+                <Spinner label="Loading exceptions…" />
+            ) : filtered.length === 0 ? (
+                <div className="text-center py-16 text-neutral-400">
+                    <div className="text-5xl mb-3">{filterStatus === 'open' ? '✓' : '○'}</div>
+                    <p className="text-sm font-medium">{filterStatus === 'open' ? 'No open exceptions' : 'No exceptions found'}</p>
+                    <p className="text-xs mt-1">{filterStatus === 'open' ? 'All vouchers synced successfully' : 'Try a different filter'}</p>
+                </div>
+            ) : (
+                <div className="border rounded-xl overflow-hidden bg-white">
+                    <table className="w-full text-xs">
+                        <thead className="bg-neutral-50 border-b">
+                            <tr>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Voucher</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Type</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600 w-48">Error</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Code</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">When</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Status</th>
+                                <th className="px-3 py-2.5 w-12"></th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                            {filtered.map((e: any, i: number) => {
+                                const isResolved = !!e.resolved_at || e.status === 'resolved'
+                                const vnum = (e.tally_voucher_number || e.voucher_number || e.voucher_guid || '—') as string
+                                const vtype = (e.voucher_type || '—') as string
+                                const errorCode = (e.error_code || '—') as string
+                                const errorMsg = (e.error_message || '—') as string
+                                const createdAt = (e.created_at || '') as string
+                                const id = (e.id || String(i)) as string
+                                return (
+                                    <tr key={id} className={`hover:bg-neutral-50 ${isResolved ? 'opacity-50' : ''}`}>
+                                        <td className="px-3 py-2 font-mono text-neutral-700 whitespace-nowrap">{vnum}</td>
+                                        <td className="px-3 py-2 text-neutral-500 whitespace-nowrap">{vtype}</td>
+                                        <td className="px-3 py-2 text-red-600">
+                                            <div className="truncate max-w-[192px]" title={errorMsg}>{errorMsg}</div>
+                                        </td>
+                                        <td className="px-3 py-2 font-mono text-orange-600 whitespace-nowrap">{errorCode}</td>
+                                        <td className="px-3 py-2 text-neutral-400 whitespace-nowrap">{createdAt ? new Date(createdAt).toLocaleString() : '—'}</td>
+                                        <td className="px-3 py-2 whitespace-nowrap">
+                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${isResolved ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                                {isResolved ? 'resolved' : 'open'}
+                                            </span>
+                                        </td>
+                                        <td className="px-3 py-2">
+                                            {!isResolved && (
+                                                <button onClick={() => retry(id)} disabled={retrying === id}
+                                                    className="text-blue-500 hover:text-blue-700 disabled:opacity-40 text-xs font-medium">
+                                                    {retrying === id ? '…' : 'Retry'}
+                                                </button>
+                                            )}
+                                        </td>
+                                    </tr>
+                                )
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    )
+}
+
+// ─── Sync Log Tab ─────────────────────────────────────────────────────────────
+
+function LogsTab() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const [records, setRecords] = useState<any[]>([])
+    const [loading, setLoading] = useState(true)
+    const [filterType, setFilterType] = useState<'all' | 'success' | 'failed' | 'pending'>('all')
+    const [search, setSearch] = useState('')
+
+    const load = useCallback(async () => {
+        setLoading(true)
+        try {
+            const data = await GetSyncHistory(300)
+            setRecords(data || [])
+        } catch { setRecords([]) }
+        setLoading(false)
+    }, [])
+
+    useEffect(() => { load() }, [load])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const filtered = records.filter((r: any) => {
+        const status = (r.status || 'pending') as string
+        if (filterType !== 'all') {
+            const matches = (filterType === 'success' && (status === 'success' || status === 'synced')) ||
+                (filterType === 'failed' && (status === 'failed' || status === 'error')) ||
+                (filterType === 'pending' && (status === 'pending' || status === 'queued'))
+            if (!matches) return false
+        }
+        if (search) {
+            const q = search.toLowerCase()
+            return (r.tally_voucher_number as string || '').toLowerCase().includes(q) ||
+                (r.voucher_type as string || '').toLowerCase().includes(q) ||
+                (r.erp_docname as string || '').toLowerCase().includes(q)
+        }
+        return true
+    })
+
+    const counts = {
+        success: records.filter((r: Record<string, unknown>) => r.status === 'success' || r.status === 'synced').length,
+        failed: records.filter((r: Record<string, unknown>) => r.status === 'failed' || r.status === 'error').length,
+        pending: records.filter((r: Record<string, unknown>) => r.status === 'pending' || r.status === 'queued').length,
+    }
+
+    const statusColor = (status: string) => {
+        if (status === 'success' || status === 'synced') return 'bg-green-100 text-green-700'
+        if (status === 'failed' || status === 'error') return 'bg-red-100 text-red-700'
+        return 'bg-yellow-100 text-yellow-700'
+    }
+
+    return (
+        <div className="p-6 space-y-4 max-w-5xl">
+            <div className="flex items-center justify-between">
+                <div>
+                    <h2 className="text-lg font-semibold">Sync Log</h2>
+                    <p className="text-xs text-neutral-400 mt-0.5">Recent voucher sync records from the cloud</p>
+                </div>
+                <Button size="sm" variant="outline" onClick={load} disabled={loading}>↻ Refresh</Button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+                <StatCard label="Synced" value={counts.success} color="green" />
+                <StatCard label="Failed" value={counts.failed} color="red" />
+                <StatCard label="Pending" value={counts.pending} color="yellow" />
+            </div>
+
+            <div className="flex gap-2 items-center">
+                <div className="flex gap-1.5 shrink-0">
+                    {(['all', 'success', 'failed', 'pending'] as const).map(f => (
+                        <button key={f} onClick={() => setFilterType(f)}
+                            className={`px-3 py-1 text-xs rounded-full font-medium border transition-colors capitalize ${filterType === f ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-neutral-200 text-neutral-600 hover:bg-neutral-50'}`}>
+                            {f}
+                        </button>
+                    ))}
+                </div>
+                <input type="text" placeholder="Search voucher number, type, ERPNext doc…"
+                    className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:ring-1 focus:ring-blue-500 outline-none"
+                    value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+
+            {loading ? (
+                <Spinner label="Loading sync records…" />
+            ) : filtered.length === 0 ? (
+                <div className="text-center py-16 text-neutral-400">
+                    <p className="text-sm">No records found</p>
+                    <p className="text-xs mt-1">Sync some vouchers first, or try a different filter</p>
+                </div>
+            ) : (
+                <div className="border rounded-xl overflow-hidden bg-white">
+                    <table className="w-full text-xs">
+                        <thead className="bg-neutral-50 border-b">
+                            <tr>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Voucher No.</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Type</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Tally Date</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">ERPNext Doc</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Synced At</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                            {filtered.slice(0, 250).map((r: any, i: number) => {
+                                const status = (r.status || 'pending') as string
+                                const syncedAt = (r.synced_at || r.created_at || '') as string
+                                return (
+                                    <tr key={i} className="hover:bg-neutral-50">
+                                        <td className="px-3 py-2 font-mono text-neutral-700">{r.tally_voucher_number || '—'}</td>
+                                        <td className="px-3 py-2 text-neutral-500">{r.voucher_type || '—'}</td>
+                                        <td className="px-3 py-2 text-neutral-400">{r.tally_date || '—'}</td>
+                                        <td className="px-3 py-2 font-mono text-blue-600">{r.erp_docname || '—'}</td>
+                                        <td className="px-3 py-2 text-neutral-400 whitespace-nowrap">{syncedAt ? new Date(syncedAt).toLocaleString() : '—'}</td>
+                                        <td className="px-3 py-2">
+                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${statusColor(status)}`}>{status}</span>
+                                        </td>
+                                    </tr>
+                                )
+                            })}
+                        </tbody>
+                    </table>
+                    {filtered.length > 250 && (
+                        <p className="text-xs text-center text-neutral-400 py-2">Showing 250 of {filtered.length} — use search to filter</p>
+                    )}
+                </div>
+            )}
+        </div>
+    )
+}
+
+// ─── Diagnostics Card ─────────────────────────────────────────────────────────
+
+function DiagnosticsCard() {
+    const [diag, setDiag] = useState<Record<string, { online: boolean; latency: number; url?: string; company?: string }> | null>(null)
+    const [running, setRunning] = useState(false)
+
+    const run = async () => {
+        setRunning(true)
+        try {
+            const res = await GetDiagnostics()
+            setDiag(res as Record<string, { online: boolean; latency: number; url?: string; company?: string }>)
+        } catch { setDiag(null) }
+        setRunning(false)
+    }
+
+    const latencyBadge = (ms: number) => {
+        if (ms < 0) return <span className="text-neutral-400 text-xs font-mono">—</span>
+        const color = ms < 100 ? 'text-green-600' : ms < 500 ? 'text-yellow-600' : 'text-red-600'
+        return <span className={`font-mono text-xs font-medium ${color}`}>{ms}ms</span>
+    }
+
+    return (
+        <Card>
+            <CardHeader>
+                <div className="flex items-center justify-between">
+                    <CardTitle>Diagnostics</CardTitle>
+                    <Button size="sm" variant="outline" onClick={run} disabled={running}>
+                        {running
+                            ? <><span className="w-3 h-3 border-2 border-neutral-400 border-t-transparent rounded-full animate-spin inline-block mr-1"></span>Running…</>
+                            : 'Run Diagnostics'}
+                    </Button>
+                </div>
+            </CardHeader>
+            <CardContent>
+                {!diag ? (
+                    <p className="text-sm text-neutral-400">Click Run Diagnostics to measure connectivity and latency to each service.</p>
+                ) : (
+                    <div className="space-y-3">
+                        {(['tally', 'erpnext', 'cloud'] as const).map(svc => {
+                            const s = diag[svc]
+                            if (!s) return null
+                            const label = svc === 'erpnext' ? 'ERPNext' : svc.charAt(0).toUpperCase() + svc.slice(1)
+                            return (
+                                <div key={svc} className="flex items-center justify-between text-sm">
+                                    <div className="flex items-center gap-2.5">
+                                        <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${s.online ? 'bg-green-500' : 'bg-red-400'}`}></span>
+                                        <span className="font-medium text-neutral-700 w-20">{label}</span>
+                                        {(s.url || s.company) && (
+                                            <span className="text-xs text-neutral-400 truncate max-w-[160px]">{s.url || s.company}</span>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        {latencyBadge(s.latency)}
+                                        <Badge variant={s.online ? 'success' : 'error'}>{s.online ? 'OK' : 'Offline'}</Badge>
+                                    </div>
+                                </div>
+                            )
+                        })}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
     )
 }
 
@@ -1423,6 +1822,8 @@ function SettingsTab({ result }: { result: ActivationResult }) {
                     </label>
                 </CardContent>
             </Card>
+
+            <DiagnosticsCard />
 
             <Card>
                 <CardHeader><CardTitle>About</CardTitle></CardHeader>
