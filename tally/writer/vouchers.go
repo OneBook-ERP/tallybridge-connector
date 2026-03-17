@@ -23,14 +23,21 @@ const (
 	ActionCancel WriteAction = "Cancel"
 )
 
+// CostCentreAllocInput is one entry in COSTCENTREALLOCATIONS.LIST for a ledger line.
+type CostCentreAllocInput struct {
+	CostCentreName string
+	Amount         float64
+}
+
 // LedgerEntryInput is one line in the ledger entries of an import voucher.
 type LedgerEntryInput struct {
-	LedgerName       string
-	IsDeemedPositive bool    // true=Debit, false=Credit
-	IsPartyLedger    bool
-	Amount           float64 // signed; positive=Debit in Tally's internal sense
-	BillAllocations  []BillAllocationInput
-	BankAllocations  []BankAllocationInput
+	LedgerName            string
+	IsDeemedPositive      bool    // true=Debit, false=Credit
+	IsPartyLedger         bool
+	Amount                float64 // signed; positive=Debit in Tally's internal sense
+	BillAllocations       []BillAllocationInput
+	BankAllocations       []BankAllocationInput
+	CostCentreAllocations []CostCentreAllocInput
 }
 
 // BillAllocationInput is a bill reference line for receivable/payable tracking.
@@ -200,6 +207,13 @@ func buildVoucherXML(v VoucherInput) string {
 				fmt.Fprintf(&b, "\n      <TRANSACTIONTYPE>%s</TRANSACTIONTYPE>", xmlEsc(bk.TransactionType))
 			}
 			b.WriteString("\n    </BANKALLOCATIONS.LIST>")
+		}
+
+		for _, cc := range le.CostCentreAllocations {
+			b.WriteString("\n    <COSTCENTREALLOCATIONS.LIST>")
+			fmt.Fprintf(&b, "\n      <NAME>%s</NAME>", xmlEsc(cc.CostCentreName))
+			fmt.Fprintf(&b, "\n      <AMOUNT>%.2f</AMOUNT>", cc.Amount)
+			b.WriteString("\n    </COSTCENTREALLOCATIONS.LIST>")
 		}
 
 		b.WriteString("\n  </ALLLEDGERENTRIES.LIST>")

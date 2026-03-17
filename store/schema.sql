@@ -51,6 +51,14 @@ INSERT OR IGNORE INTO mapping_config (section) VALUES ('conflict_resolution');
 INSERT OR IGNORE INTO mapping_config (section) VALUES ('historical_import');
 INSERT OR IGNORE INTO mapping_config (section) VALUES ('exception_handling');
 
+CREATE TABLE IF NOT EXISTS master_hashes (
+    entity_type  TEXT NOT NULL,  -- 'ledger' | 'stock_item' | 'stock_group' | 'uom' | 'godown'
+    entity_guid  TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    synced_at    DATETIME NOT NULL,
+    PRIMARY KEY (entity_type, entity_guid)
+);
+
 -- Seed known config keys with empty defaults.
 INSERT OR IGNORE INTO config (key) VALUES ('company_tally_name');
 INSERT OR IGNORE INTO config (key) VALUES ('machine_token');

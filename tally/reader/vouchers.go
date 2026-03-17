@@ -14,38 +14,42 @@ import (
 
 // Voucher holds a fully parsed Tally voucher from API 10 (delta) or API 11 (single).
 type Voucher struct {
-	GUID              string          `json:"guid"`
-	Date              time.Time       `json:"date"`
-	AlteredOn         time.Time       `json:"alteredOn"`
-	VoucherTypeName   string          `json:"voucherTypeName"`
-	VoucherNumber     string          `json:"voucherNumber"`
-	ReferenceNumber   string          `json:"referenceNumber"`
-	ReferenceDate     time.Time       `json:"referenceDate"`
-	PartyLedgerName   string          `json:"partyLedgerName"`
-	IsInvoice         bool            `json:"isInvoice"`
-	IsOptional        bool            `json:"isOptional"`
-	IsCancelled       bool            `json:"isCancelled"`
-	IsDeleted         bool            `json:"isDeleted"`
-	Narration         string          `json:"narration"`
-	ForeignCurrency   string          `json:"foreignCurrency"`
-	ForeignAmount     float64         `json:"foreignAmount"`
-	PlaceOfSupply     string          `json:"placeOfSupply"`
-	PartyGSTIN        string          `json:"partyGSTIN"`
-	IsRCMApplicable   bool            `json:"isRCMApplicable"`
-	EWayBillNumber    string          `json:"eWayBillNumber"`
-	IRNNO             string          `json:"irnNo"`
-	LedgerEntries     []LedgerEntry   `json:"ledgerEntries"`
-	InventoryEntries  []InventoryEntry `json:"inventoryEntries"`
+	GUID                  string             `json:"guid"`
+	Date                  time.Time          `json:"date"`
+	AlteredOn             time.Time          `json:"alteredOn"`
+	VoucherTypeName       string             `json:"voucherTypeName"`
+	VoucherNumber         string             `json:"voucherNumber"`
+	ReferenceNumber       string             `json:"referenceNumber"`
+	ReferenceDate         time.Time          `json:"referenceDate"`
+	PartyLedgerName       string             `json:"partyLedgerName"`
+	IsInvoice             bool               `json:"isInvoice"`
+	IsOptional            bool               `json:"isOptional"`
+	IsCancelled           bool               `json:"isCancelled"`
+	IsDeleted             bool               `json:"isDeleted"`
+	Narration             string             `json:"narration"`
+	ForeignCurrency       string             `json:"foreignCurrency"`
+	ForeignAmount         float64            `json:"foreignAmount"`
+	PlaceOfSupply         string             `json:"placeOfSupply"`
+	PartyGSTIN            string             `json:"partyGSTIN"`
+	IsRCMApplicable       bool               `json:"isRCMApplicable"`
+	EWayBillNumber        string             `json:"eWayBillNumber"`
+	IRNNO                 string             `json:"irnNo"`
+	IRN                   string             `json:"irn,omitempty"`
+	IRNAckNo              string             `json:"irnAckNo,omitempty"`
+	CostCentreAllocations []CostCentreAlloc  `json:"costCentreAllocations,omitempty"`
+	LedgerEntries         []LedgerEntry      `json:"ledgerEntries"`
+	InventoryEntries      []InventoryEntry   `json:"inventoryEntries"`
 }
 
 // LedgerEntry is one line in ALLLEDGERENTRIES.
 type LedgerEntry struct {
-	LedgerName       string           `json:"ledgerName"`
-	IsDeemedPositive bool             `json:"isDeemedPositive"`
-	IsPartyLedger    bool             `json:"isPartyLedger"`
-	Amount           float64          `json:"amount"`
-	BillAllocations  []BillAllocation `json:"billAllocations"`
-	BankAllocations  []BankAllocation `json:"bankAllocations"`
+	LedgerName              string            `json:"ledgerName"`
+	IsDeemedPositive        bool              `json:"isDeemedPositive"`
+	IsPartyLedger           bool              `json:"isPartyLedger"`
+	Amount                  float64           `json:"amount"`
+	BillAllocations         []BillAllocation  `json:"billAllocations"`
+	BankAllocations         []BankAllocation  `json:"bankAllocations"`
+	CostCentreAllocations   []CostCentreAlloc `json:"costCentreAllocations,omitempty"`
 }
 
 // BillAllocation is one entry in BILLALLOCATIONS.LIST.
@@ -61,6 +65,13 @@ type BankAllocation struct {
 	InstNumber            string `json:"instNumber"`
 	UniqueReferenceNumber string `json:"uniqueReferenceNumber"`
 	TransactionType       string `json:"transactionType"`
+}
+
+// CostCentreAlloc is one entry in COSTCENTREALLOCATIONS.LIST.
+type CostCentreAlloc struct {
+	LedgerName      string  `json:"ledgerName"`
+	CostCentreName  string  `json:"costCentreName"`
+	Amount          float64 `json:"amount"`
 }
 
 // InventoryEntry is one line in ALLINVENTORYENTRIES.
@@ -91,37 +102,47 @@ type vouchersData struct{ Collection vouchersCollection `xml:"COLLECTION"` }
 type vouchersCollection struct{ Vouchers []xmlVoucher `xml:"VOUCHER"` }
 
 type xmlVoucher struct {
-	GUID              string              `xml:"GUID"`
-	Date              string              `xml:"DATE"`
-	AlteredOn         string              `xml:"ALTEREDON"`
-	VoucherTypeName   string              `xml:"VOUCHERTYPENAME"`
-	VoucherNumber     string              `xml:"VOUCHERNUMBER"`
-	ReferenceNumber   string              `xml:"REFERENCE"` // Tally returns reference under <REFERENCE>, not <REFERENCENUMBER>
-	ReferenceDate     string              `xml:"REFERENCEDATE"`
-	PartyLedgerName   string              `xml:"PARTYLEDGERNAME"`
-	IsInvoice         string              `xml:"ISINVOICE"`
-	IsOptional        string              `xml:"ISOPTIONAL"`
-	IsCancelled       string              `xml:"ISCANCELLED"`
-	IsDeleted         string              `xml:"ISDELETED"`
-	Narration         string              `xml:"NARRATION"`
-	ForeignCurrency   string              `xml:"FOREIGNCURRENCY"`
-	ForeignAmount     string              `xml:"FOREIGNAMOUNT"`
-	PlaceOfSupply     string              `xml:"PLACEOFSUPPLY"`
-	PartyGSTIN        string              `xml:"PARTYGSTIN"`
-	IsRCMApplicable   string              `xml:"ISRCMAPPLICABLE"`
-	EWayBillNumber    string              `xml:"EWAYBILLNUMBER"`
-	IRNNO             string              `xml:"IRNNO"`
-	LedgerEntries     []xmlLedgerEntry    `xml:"ALLLEDGERENTRIES.LIST"`
-	InventoryEntries  []xmlInventoryEntry `xml:"ALLINVENTORYENTRIES.LIST"`
+	GUID                  string                 `xml:"GUID"`
+	Date                  string                 `xml:"DATE"`
+	AlteredOn             string                 `xml:"ALTEREDON"`
+	VoucherTypeName       string                 `xml:"VOUCHERTYPENAME"`
+	VoucherNumber         string                 `xml:"VOUCHERNUMBER"`
+	ReferenceNumber       string                 `xml:"REFERENCE"` // Tally returns reference under <REFERENCE>, not <REFERENCENUMBER>
+	ReferenceDate         string                 `xml:"REFERENCEDATE"`
+	PartyLedgerName       string                 `xml:"PARTYLEDGERNAME"`
+	IsInvoice             string                 `xml:"ISINVOICE"`
+	IsOptional            string                 `xml:"ISOPTIONAL"`
+	IsCancelled           string                 `xml:"ISCANCELLED"`
+	IsDeleted             string                 `xml:"ISDELETED"`
+	Narration             string                 `xml:"NARRATION"`
+	ForeignCurrency       string                 `xml:"FOREIGNCURRENCY"`
+	ForeignAmount         string                 `xml:"FOREIGNAMOUNT"`
+	PlaceOfSupply         string                 `xml:"PLACEOFSUPPLY"`
+	PartyGSTIN            string                 `xml:"PARTYGSTIN"`
+	IsRCMApplicable       string                 `xml:"ISRCMAPPLICABLE"`
+	EWayBillNumber        string                 `xml:"EWAYBILLNUMBER"`
+	IRNNO                 string                 `xml:"IRNNO"`
+	IRN                   string                 `xml:"IRN"`
+	IRNAckNo              string                 `xml:"IRNACKNO"`
+	CostCentreAllocations []xmlCostCentreAlloc   `xml:"COSTCENTREALLOCATIONS.LIST"`
+	LedgerEntries         []xmlLedgerEntry       `xml:"ALLLEDGERENTRIES.LIST"`
+	InventoryEntries      []xmlInventoryEntry    `xml:"ALLINVENTORYENTRIES.LIST"`
+}
+
+type xmlCostCentreAlloc struct {
+	LedgerName     string `xml:"LEDGERNAME"`
+	CostCentreName string `xml:"NAME"`
+	Amount         string `xml:"AMOUNT"`
 }
 
 type xmlLedgerEntry struct {
-	LedgerName       string            `xml:"LEDGERNAME"`
-	IsDeemedPositive string            `xml:"ISDEEMEDPOSITIVE"`
-	IsPartyLedger    string            `xml:"ISPARTYLEDGER"`
-	Amount           string            `xml:"AMOUNT"`
-	BillAllocations  []xmlBillAlloc    `xml:"BILLALLOCATIONS.LIST"`
-	BankAllocations  []xmlBankAlloc    `xml:"BANKALLOCATIONS.LIST"`
+	LedgerName            string               `xml:"LEDGERNAME"`
+	IsDeemedPositive      string               `xml:"ISDEEMEDPOSITIVE"`
+	IsPartyLedger         string               `xml:"ISPARTYLEDGER"`
+	Amount                string               `xml:"AMOUNT"`
+	BillAllocations       []xmlBillAlloc       `xml:"BILLALLOCATIONS.LIST"`
+	BankAllocations       []xmlBankAlloc       `xml:"BANKALLOCATIONS.LIST"`
+	CostCentreAllocations []xmlCostCentreAlloc `xml:"COSTCENTREALLOCATIONS.LIST"`
 }
 
 type xmlBillAlloc struct {
@@ -166,7 +187,9 @@ var voucherFetchFields = []string{
 	"IsInvoice", "IsOptional", "IsCancelled", "IsDeleted", "Narration",
 	"ForeignCurrency", "ForeignAmount", "PlaceOfSupply",
 	"PartyGSTIN", "IsRCMApplicable", "EWayBillNumber", "IRNNO",
+	"IRN", "IRNACKNO",
 	"ALTEREDON", "AllLedgerEntries", "AllInventoryEntries", "BillAllocations",
+	"CostCentreAllocations",
 }
 
 // ---- Public API -------------------------------------------------------------
@@ -313,6 +336,20 @@ func mapXMLVoucher(xv xmlVoucher) Voucher {
 		IsRCMApplicable: parser.ParseBool(xv.IsRCMApplicable),
 		EWayBillNumber:  xv.EWayBillNumber,
 		IRNNO:           xv.IRNNO,
+		IRN:             xv.IRN,
+		IRNAckNo:        xv.IRNAckNo,
+	}
+
+	// Voucher-level cost centre allocations
+	if len(xv.CostCentreAllocations) > 0 {
+		v.CostCentreAllocations = make([]CostCentreAlloc, 0, len(xv.CostCentreAllocations))
+		for _, xc := range xv.CostCentreAllocations {
+			v.CostCentreAllocations = append(v.CostCentreAllocations, CostCentreAlloc{
+				LedgerName:     xc.LedgerName,
+				CostCentreName: xc.CostCentreName,
+				Amount:         parser.ParseAmount(xc.Amount),
+			})
+		}
 	}
 	if t, err := parser.ParseDate(xv.Date); err == nil {
 		v.Date = t
@@ -349,6 +386,13 @@ func mapXMLVoucher(xv xmlVoucher) Voucher {
 				InstNumber:            xbk.InstNumber,
 				UniqueReferenceNumber: xbk.UniqueReferenceNumber,
 				TransactionType:       xbk.TransactionType,
+			})
+		}
+		for _, xcc := range xl.CostCentreAllocations {
+			le.CostCentreAllocations = append(le.CostCentreAllocations, CostCentreAlloc{
+				LedgerName:     xcc.LedgerName,
+				CostCentreName: xcc.CostCentreName,
+				Amount:         parser.ParseAmount(xcc.Amount),
 			})
 		}
 		v.LedgerEntries = append(v.LedgerEntries, le)
