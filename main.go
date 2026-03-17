@@ -19,6 +19,11 @@ import (
 var assets embed.FS
 
 func main() {
+	// 0. Single-instance check — exit if already running
+	if !ensureSingleInstance() {
+		return
+	}
+
 	// 1. Initialize local SQLite DB
 	db, err := store.InitDB("connector.db")
 	if err != nil {

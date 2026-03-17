@@ -404,19 +404,22 @@ func (a *App) SaveSyncRange(fromDate, toDate string) error {
 	return a.db.SetConfig("sync_to_date", toDate)
 }
 
-// GetMappingConfig returns the JSON config string for a mapping section.
+// GetMappingConfig returns the JSON config string for a mapping section for the current company.
 func (a *App) GetMappingConfig(section string) string {
-	return a.db.GetMappingConfig(section)
+	companyID := a.db.GetConfig("company_id")
+	return a.db.GetMappingConfig(companyID, section)
 }
 
-// SetMappingConfig saves the JSON config for a mapping section.
+// SetMappingConfig saves the JSON config for a mapping section for the current company.
 func (a *App) SetMappingConfig(section, jsonConfig string) error {
-	return a.db.SetMappingConfig(section, jsonConfig)
+	companyID := a.db.GetConfig("company_id")
+	return a.db.SetMappingConfig(companyID, section, jsonConfig)
 }
 
-// GetAllMappingConfigs returns all mapping sections as a map.
+// GetAllMappingConfigs returns all mapping sections for the current company.
 func (a *App) GetAllMappingConfigs() map[string]string {
-	return a.db.GetAllMappingConfigs()
+	companyID := a.db.GetConfig("company_id")
+	return a.db.GetAllMappingConfigs(companyID)
 }
 
 // RegisterWithCloud registers this connector with the cloud middleware.
@@ -431,22 +434,25 @@ func (a *App) RegisterWithCloud(cloudURL, companyName string) map[string]interfa
 		_ = a.db.SetConfig("machine_id", machineID)
 	}
 
-	// Attach all locally-configured mapping sections so the cloud can
-	// store them in config_profiles on registration.
-	mappings := a.db.GetAllMappingConfigs()
-	mappingsParsed := make(map[string]interface{})
-	for k, v := range mappings {
-		var parsed interface{}
-		if err := json.Unmarshal([]byte(v), &parsed); err == nil {
-			mappingsParsed[k] = parsed
+	// If the company name has changed, clear the old company's cached mappings
+	// and credentials so the new company starts fresh.
+	previousCompany := a.db.GetConfig("company_tally_name")
+	if previousCompany != "" && previousCompany != companyName {
+		oldCompanyID := a.db.GetConfig("company_id")
+		if oldCompanyID != "" {
+			_ = a.db.ClearMappingConfig(oldCompanyID)
 		}
+		_ = a.db.SetConfig("machine_token", "")
+		_ = a.db.SetConfig("company_id", "")
+		fmt.Printf("[RegisterWithCloud] Company changed from %q to %q — cleared old state\n", previousCompany, companyName)
 	}
 
+	// Cloud is the source of truth for all mappings.
+	// Registration only sends identity — no local mapping data.
 	body := map[string]interface{}{
-		"machineId":      machineID,
-		"companyName":    companyName,
-		"osInfo":         runtime.GOOS + "/" + runtime.GOARCH,
-		"mappingConfigs": mappingsParsed,
+		"machineId":   machineID,
+		"companyName": companyName,
+		"osInfo":      runtime.GOOS + "/" + runtime.GOARCH,
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -494,11 +500,64 @@ func (a *App) RegisterWithCloud(cloudURL, companyName string) map[string]interfa
 	_ = a.db.SetConfig("last_registered_at", time.Now().Format(time.RFC3339))
 
 	fmt.Printf("Registered with cloud: companyId=%s\n", result.CompanyID)
+
+	// Pull cloud-seeded defaults (GST mappings, voucher types) into local cache.
+	// This is a best-effort call — if it fails the next sync will retry.
+	go func() {
+		if r := a.GetCloudConfig(); r["status"] != "ok" {
+			fmt.Printf("[RegisterWithCloud] GetCloudConfig after registration: %v\n", r["message"])
+		}
+	}()
+
 	return map[string]interface{}{
 		"status":    "ok",
 		"companyId": result.CompanyID,
 		"message":   "Registered successfully",
 	}
+}
+
+// GetCloudConfig pulls the latest config from the cloud platform and stores
+// account/GST/voucher-type/godown mappings into the local mapping_config SQLite table.
+func (a *App) GetCloudConfig() map[string]interface{} {
+	data, status, err := a.cloudCall("GET", "/api/connector/config", nil)
+	if err != nil {
+		return map[string]interface{}{"status": "error", "message": err.Error()}
+	}
+	if status != 200 {
+		return map[string]interface{}{"status": "error", "message": fmt.Sprintf("cloud returned %d", status)}
+	}
+	var resp struct {
+		AccountMappings         map[string]interface{} `json:"accountMappings"`
+		GstLedgerMappings       map[string]interface{} `json:"gstLedgerMappings"`
+		VoucherTypeMappings     map[string]interface{} `json:"voucherTypeMappings"`
+		GodownWarehouseMappings map[string]interface{} `json:"godownWarehouseMappings"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return map[string]interface{}{"status": "error", "message": "parse error: " + err.Error()}
+	}
+	// Cache each section into the local mapping_config table scoped by company.
+	companyID := a.db.GetConfig("company_id")
+	if resp.AccountMappings != nil {
+		if b, err := json.Marshal(resp.AccountMappings); err == nil {
+			_ = a.db.SetMappingConfig(companyID, "account_coa", string(b))
+		}
+	}
+	if resp.GstLedgerMappings != nil {
+		if b, err := json.Marshal(resp.GstLedgerMappings); err == nil {
+			_ = a.db.SetMappingConfig(companyID, "gst_ledger", string(b))
+		}
+	}
+	if resp.VoucherTypeMappings != nil {
+		if b, err := json.Marshal(resp.VoucherTypeMappings); err == nil {
+			_ = a.db.SetMappingConfig(companyID, "voucher_types", string(b))
+		}
+	}
+	if resp.GodownWarehouseMappings != nil {
+		if b, err := json.Marshal(resp.GodownWarehouseMappings); err == nil {
+			_ = a.db.SetMappingConfig(companyID, "godown_warehouse", string(b))
+		}
+	}
+	return map[string]interface{}{"status": "ok", "message": "Config pulled from cloud"}
 }
 
 // StartBackgroundSync reads registration credentials from SQLite and starts
@@ -515,6 +574,13 @@ func (a *App) StartBackgroundSync() map[string]interface{} {
 			"message": "Not registered with cloud — complete registration first",
 		}
 	}
+
+	// Push ERPNext credentials first so the cloud can seed defaults,
+	// then pull the seeded config into local cache.
+	if err := a.PushMappingsToCloud(); err != nil {
+		fmt.Printf("[StartBackgroundSync] Warning: could not push credentials: %v\n", err)
+	}
+	a.GetCloudConfig()
 
 	// Stop any existing scheduler before replacing
 	if a.scheduler != nil {
@@ -926,72 +992,37 @@ func (a *App) PushMappingsToCloud() error {
 		return fmt.Errorf("not registered with cloud")
 	}
 
-	// Parse all mapping sections
-	mappings := a.db.GetAllMappingConfigs()
+	// Push ERPNext credentials + any locally-configured account mappings.
+	// Cloud uses || (JSONB merge) so cloud UI edits always win — local entries
+	// only add new keys, never overwrite existing ones.
+	// GST and voucher type mappings are auto-seeded by autoFetchAndSeedCompany,
+	// so we only push account_coa (user-configured specific ledger overrides).
 	accountMappings := make(map[string]interface{})
-	gstMappings := make(map[string]interface{})
-	voucherTypeMappings := make(map[string]interface{})
-
-	if v, ok := mappings["account_coa"]; ok {
-		_ = json.Unmarshal([]byte(v), &accountMappings)
-	}
-	if v, ok := mappings["gst_ledger"]; ok {
-		_ = json.Unmarshal([]byte(v), &gstMappings)
-	}
-
-	// Strip meta keys like _type injected by UI defaults
-	for k := range accountMappings {
-		if len(k) > 0 && k[0] == '_' {
-			delete(accountMappings, k)
-		}
-	}
-	for k := range gstMappings {
-		if len(k) > 0 && k[0] == '_' {
-			delete(gstMappings, k)
-		}
-	}
-	if v, ok := mappings["voucher_type"]; ok {
-		// Cloud expects { "Sales": { "erpnextDoctype": "Sales Invoice" }, ... }
-		// Connector stores { "Sales": "Sales Invoice", "Contra": "Journal Entry" }
-		// Convert flat string to object form that the cloud's CompanyConfig expects.
-		var flat map[string]string
-		if err := json.Unmarshal([]byte(v), &flat); err == nil {
-			for tallyType, erpDoctype := range flat {
-				if erpDoctype == "Skip" {
-					continue
+	if raw := a.db.GetMappingConfig(companyID, "account_coa"); raw != "{}" {
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+			for k, v := range parsed {
+				if len(k) > 0 && k[0] == '_' {
+					continue // strip meta keys like _type
 				}
-				vt := map[string]interface{}{"erpnextDoctype": erpDoctype}
-				switch erpDoctype {
-				case "Payment Entry (Receive)", "Receipt":
-					vt["erpnextDoctype"] = "Payment Entry"
-					vt["paymentType"] = "Receive"
-				case "Payment Entry (Pay)":
-					vt["erpnextDoctype"] = "Payment Entry"
-					vt["paymentType"] = "Pay"
-				case "Sales Invoice (Return)":
-					vt["erpnextDoctype"] = "Sales Invoice"
-					vt["isReturn"] = true
-				case "Purchase Invoice (Return)":
-					vt["erpnextDoctype"] = "Purchase Invoice"
-					vt["isReturn"] = true
+				if v == "" || v == nil {
+					continue // strip empty values
 				}
-				voucherTypeMappings[tallyType] = vt
+				accountMappings[k] = v
 			}
 		}
 	}
 
 	body := map[string]interface{}{
-		"companyId":           companyID,
-		"accountMappings":     accountMappings,
-		"gstLedgerMappings":   gstMappings,
-		"voucherTypeMappings": voucherTypeMappings,
-		"erpnextUrl":          a.db.GetConfig("erpnext_url"),
-		"erpnextApiKey":       a.db.GetConfig("erpnext_api_key"),
-		"erpnextApiSecret":    a.db.GetConfig("erpnext_api_secret"),
-		"erpnextCompany":      a.db.GetConfig("erpnext_company"),
-		"erpnextGstin":        a.db.GetConfig("erpnext_gstin"),
-		"erpnextWarehouse":    a.db.GetConfig("erpnext_warehouse"),
-		"erpnextCostCenter":   a.db.GetConfig("erpnext_cost_center"),
+		"companyId":         companyID,
+		"erpnextUrl":        a.db.GetConfig("erpnext_url"),
+		"erpnextApiKey":     a.db.GetConfig("erpnext_api_key"),
+		"erpnextApiSecret":  a.db.GetConfig("erpnext_api_secret"),
+		"erpnextCompany":    a.db.GetConfig("erpnext_company"),
+		"erpnextGstin":      a.db.GetConfig("erpnext_gstin"),
+		"erpnextWarehouse":  a.db.GetConfig("erpnext_warehouse"),
+		"erpnextCostCenter": a.db.GetConfig("erpnext_cost_center"),
+		"accountMappings":   accountMappings,
 	}
 
 	payload, err := json.Marshal(body)
@@ -1033,12 +1064,17 @@ func (a *App) SyncNow(fullSync bool) map[string]interface{} {
 		return map[string]interface{}{"status": "error", "message": "Tally client not initialised"}
 	}
 
-	// Push current mappings to cloud before syncing
+	// Push ERPNext credentials to cloud first — this triggers autoFetchAndSeedCompany
+	// which seeds GST + voucher type defaults. Then pull the seeded config back.
 	if err := a.PushMappingsToCloud(); err != nil {
-		fmt.Printf("[SyncNow] Warning: could not push mappings to cloud: %v\n", err)
-		// Non-fatal — continue with sync using whatever the cloud already has
+		fmt.Printf("[SyncNow] Warning: could not push credentials to cloud: %v\n", err)
 	} else {
-		fmt.Println("[SyncNow] Mappings pushed to cloud")
+		fmt.Println("[SyncNow] Credentials pushed to cloud")
+	}
+	if r := a.GetCloudConfig(); r["status"] != "ok" {
+		fmt.Printf("[SyncNow] Warning: could not pull config from cloud: %v\n", r["message"])
+	} else {
+		fmt.Println("[SyncNow] Config pulled from cloud")
 	}
 
 	if fullSync {
@@ -1377,7 +1413,7 @@ func (a *App) GetSyncExceptions(limit int) []map[string]interface{} {
 	if limit <= 0 {
 		limit = 100
 	}
-	path := fmt.Sprintf("/api/dashboard/exceptions?companyId=%s&limit=%d", url.QueryEscape(companyID), limit)
+	path := fmt.Sprintf("/api/connector/exceptions?limit=%d", limit)
 	data, status, err := a.cloudCall("GET", path, nil)
 	if err != nil || status != 200 {
 		return []map[string]interface{}{}
@@ -1391,6 +1427,39 @@ func (a *App) GetSyncExceptions(limit int) []map[string]interface{} {
 	return resp.Exceptions
 }
 
+// GetTallyCounts queries Tally for voucher and master counts and returns them.
+// Called periodically to update the cloud's tally_counts record.
+func (a *App) GetTallyCounts() map[string]interface{} {
+	tallyURL := a.db.GetConfig("tally_url")
+	companyName := a.db.GetConfig("company_tally_name")
+	fromDate := a.db.GetConfig("sync_from_date")
+	toDate := a.db.GetConfig("sync_to_date")
+
+	if tallyURL == "" || companyName == "" {
+		return map[string]interface{}{"status": "error", "message": "Tally not configured"}
+	}
+
+	counts := make(map[string]interface{})
+
+	// Get voucher counts
+	voucherCounts, err := reader.GetVoucherCounts(tallyURL, companyName, fromDate, toDate)
+	if err == nil {
+		for k, v := range voucherCounts {
+			counts[k] = v
+		}
+	}
+
+	// Get master counts
+	masterCounts, err := reader.GetMasterCounts(tallyURL, companyName)
+	if err == nil {
+		for k, v := range masterCounts {
+			counts[k] = v
+		}
+	}
+
+	return map[string]interface{}{"status": "ok", "counts": counts}
+}
+
 // ReprocessException triggers reprocessing of a specific exception (or all if id == "all").
 func (a *App) ReprocessException(exceptionId string) map[string]interface{} {
 	companyID := a.db.GetConfig("company_id")
@@ -1401,7 +1470,7 @@ func (a *App) ReprocessException(exceptionId string) map[string]interface{} {
 	if exceptionId != "" && exceptionId != "all" {
 		body["exceptionIds"] = []string{exceptionId}
 	}
-	data, status, err := a.cloudCall("POST", "/api/dashboard/reprocess-exceptions", body)
+	data, status, err := a.cloudCall("POST", "/api/connector/reprocess-exceptions", body)
 	if err != nil {
 		return map[string]interface{}{"status": "error", "message": err.Error()}
 	}
@@ -1420,7 +1489,7 @@ func (a *App) GetSyncHistory(limit int) []map[string]interface{} {
 	if limit <= 0 {
 		limit = 200
 	}
-	path := fmt.Sprintf("/api/dashboard/sync-records?companyId=%s&limit=%d", url.QueryEscape(companyID), limit)
+	path := fmt.Sprintf("/api/connector/sync-records?limit=%d", limit)
 	data, status, err := a.cloudCall("GET", path, nil)
 	if err != nil || status != 200 {
 		return []map[string]interface{}{}

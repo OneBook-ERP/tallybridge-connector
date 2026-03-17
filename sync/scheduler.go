@@ -11,6 +11,7 @@ import (
 
 	"github.com/tallybridge/connector/store"
 	"github.com/tallybridge/connector/tally"
+	"github.com/tallybridge/connector/tally/reader"
 )
 
 // Scheduler runs the periodic delta sync cycle (Step 19).
@@ -41,18 +42,25 @@ func NewScheduler(client *tally.Client, db *store.Store, cloudURL, token, compan
 }
 
 // sendHeartbeat posts the connector's status to the cloud.
-func (s *Scheduler) sendHeartbeat() {
+// tallyCounts may be nil for lightweight heartbeats (sent every 30s);
+// it is populated only on the sync ticker (every 5 min) to avoid blocking.
+func (s *Scheduler) sendHeartbeat(tallyCounts map[string]interface{}) {
 	tallyStatus := "OFFLINE"
 	if s.client != nil {
 		tallyStatus = "ONLINE"
 	}
 
-	body, _ := json.Marshal(map[string]interface{}{
+	payload := map[string]interface{}{
 		"companyId":        s.companyID,
 		"tallyStatus":      tallyStatus,
 		"openCompany":      s.companyName,
 		"pendingLocalJobs": 0,
-	})
+	}
+	if len(tallyCounts) > 0 {
+		payload["tallyCounts"] = tallyCounts
+	}
+
+	body, _ := json.Marshal(payload)
 
 	req, err := http.NewRequest("POST", s.cloudURL+"/connector/heartbeat", bytes.NewReader(body))
 	if err != nil {
@@ -70,10 +78,36 @@ func (s *Scheduler) sendHeartbeat() {
 	resp.Body.Close()
 }
 
+// fetchTallyCounts queries Tally for voucher and master counts.
+// Runs in the sync ticker goroutine (every 5 min) — never in the 30s heartbeat.
+func (s *Scheduler) fetchTallyCounts() map[string]interface{} {
+	if s.client == nil || s.db == nil {
+		return nil
+	}
+	tallyURL := s.db.GetConfig("tally_url")
+	fromDate := s.db.GetConfig("sync_from_date")
+	toDate := s.db.GetConfig("sync_to_date")
+	if tallyURL == "" || s.companyName == "" {
+		return nil
+	}
+	counts := make(map[string]interface{})
+	if vc, err := reader.GetVoucherCounts(tallyURL, s.companyName, fromDate, toDate); err == nil {
+		for k, v := range vc {
+			counts[k] = v
+		}
+	}
+	if mc, err := reader.GetMasterCounts(tallyURL, s.companyName); err == nil {
+		for k, v := range mc {
+			counts[k] = v
+		}
+	}
+	return counts
+}
+
 // Start begins the delta sync ticker and the reverse sync long-poll loop.
 func (s *Scheduler) Start() {
-	// Send initial heartbeat immediately
-	go s.sendHeartbeat()
+	// Send initial heartbeat immediately (no counts — don't block startup).
+	go s.sendHeartbeat(nil)
 
 	// Tally → ERPNext: periodic delta sync + heartbeat
 	go func() {
@@ -87,7 +121,9 @@ func (s *Scheduler) Start() {
 		for {
 			select {
 			case <-ticker.C:
-				s.sendHeartbeat()
+				// Fetch counts once per sync cycle and include in heartbeat.
+				counts := s.fetchTallyCounts()
+				s.sendHeartbeat(counts)
 				err := DeltaSync(context.Background(), s.client, s.db, s.cloudURL, s.machineToken, s.companyID, s.companyName)
 				if err != nil {
 					fmt.Printf("Delta sync error: %v\n", err)
@@ -95,7 +131,8 @@ func (s *Scheduler) Start() {
 					fmt.Println("Delta sync completed successfully")
 				}
 			case <-hbTicker.C:
-				s.sendHeartbeat()
+				// Lightweight heartbeat — no counts to avoid blocking.
+				s.sendHeartbeat(nil)
 			case <-s.stopCh:
 				fmt.Println("Stopping Delta Sync Scheduler")
 				return

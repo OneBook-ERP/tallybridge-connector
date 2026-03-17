@@ -80,7 +80,7 @@ function SetupWizard({ onActivated }: { onActivated: (r: ActivationResult) => vo
     const [step, setStep] = useState(1)
 
     // Step 2
-    const [tallyUrl, setTallyUrl] = useState('http://192.168.1.12:9000')
+    const [tallyUrl, setTallyUrl] = useState('http://localhost:9000')
     const [tallyOnline, setTallyOnline] = useState(false)
     const [isScanning, setIsScanning] = useState(false)
 
@@ -94,10 +94,10 @@ function SetupWizard({ onActivated }: { onActivated: (r: ActivationResult) => vo
     const [loadingCompanies, setLoadingCompanies] = useState(false)
 
     // Step 4
-    const [erpnextUrl, setErpnextUrl] = useState('https://tally.zenpivot.in')
-    const [apiKey, setApiKey] = useState('2015ad50ead346b')
-    const [apiSecret, setApiSecret] = useState('fde5d28a4c3dbe1')
-    const [cloudUrl, setCloudUrl] = useState('http://localhost:3000')
+    const [erpnextUrl, setErpnextUrl] = useState('')
+    const [apiKey, setApiKey] = useState('')
+    const [apiSecret, setApiSecret] = useState('')
+    const [cloudUrl, setCloudUrl] = useState('https://tally2erpnext.onebook.app')
     const [companyGstin, setCompanyGstin] = useState('')
     const [defaultWarehouse, setDefaultWarehouse] = useState('')
     const [defaultCostCenter, setDefaultCostCenter] = useState('')
@@ -518,7 +518,7 @@ function SetupWizard({ onActivated }: { onActivated: (r: ActivationResult) => vo
                                         <Field label="API Secret" type="password" mono value={apiSecret} onChange={setApiSecret} disabled={isTestingErp} />
                                     </div>
                                     <Field label="TallyBridge Cloud URL" type="url" mono value={cloudUrl} onChange={setCloudUrl} disabled={isTestingErp}
-                                        hint="Middleware server (default: http://localhost:3000)" />
+                                        hint="Middleware server (default: https://tally2erpnext.onebook.app)" />
                                     <div className="grid grid-cols-3 gap-3">
                                         <Field label="Company GSTIN" type="text" mono value={companyGstin} onChange={setCompanyGstin} disabled={isTestingErp}
                                             hint="15-char GST number" />
@@ -897,11 +897,11 @@ function Dashboard({ result, onAddCompany }: { result: ActivationResult; onAddCo
             if (info.status === 'ok' && info.hasUpdate) {
                 setUpdateInfo({ hasUpdate: true, latestVersion: info.latestVersion as string, releaseUrl: info.releaseUrl as string })
             }
-        }).catch(() => {})
+        }).catch(() => { })
         GetSyncExceptions(200).then(exceptions => {
             const open = (exceptions || []).filter(e => !e.resolved_at && e.status !== 'resolved').length
             setExceptionCount(open)
-        }).catch(() => {})
+        }).catch(() => { })
     }, [result])
 
     const NAV_ITEMS: { id: DashboardTab; label: string; badge?: number }[] = [
@@ -1189,6 +1189,39 @@ function ExceptionsTab({ onCountChange }: { onCountChange: (n: number) => void }
         setRetrying(null)
     }
 
+    const retryAllFailed = async () => {
+        setRetrying('failed')
+        setRetryMsg(null)
+        try {
+            const res = await ReprocessException('ERPNEXT_WRITE_FAILED')
+            if (res.status === 'ok') {
+                setRetryMsg({ type: 'ok', text: 'All ERPNEXT_WRITE_FAILED exceptions queued for reprocessing' })
+                setTimeout(load, 2500)
+            } else {
+                setRetryMsg({ type: 'error', text: res.message as string })
+            }
+        } catch (e) { setRetryMsg({ type: 'error', text: String(e) }) }
+        setRetrying(null)
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const getSeverity = (e: any): { label: string; cls: string } => {
+        const tier = e.tier as string | undefined
+        const code = (e.error_code || '') as string
+        if (tier === 'TIER3_BLOCK' || code === 'UNMAPPED_LEDGER' || code === 'MISSING_GSTIN') {
+            return { label: 'Blocked', cls: 'bg-red-100 text-red-700' }
+        }
+        if (tier === 'TIER2_FLAG' || code === 'ERPNEXT_WRITE_FAILED' || code === 'MASTER_CREATE_FAILED') {
+            return { label: 'Failed', cls: 'bg-orange-100 text-orange-700' }
+        }
+        return { label: 'Info', cls: 'bg-neutral-100 text-neutral-500' }
+    }
+
+    const failedCount = exceptions.filter((e: Record<string, unknown>) =>
+        !e.resolved_at && e.status !== 'resolved' &&
+        (e.error_code === 'ERPNEXT_WRITE_FAILED' || e.error_code === 'MASTER_CREATE_FAILED')
+    ).length
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const filtered = exceptions.filter((e: any) => {
         if (filterStatus === 'open') return !e.resolved_at && e.status !== 'resolved'
@@ -1206,6 +1239,12 @@ function ExceptionsTab({ onCountChange }: { onCountChange: (n: number) => void }
                 </div>
                 <div className="flex items-center gap-2">
                     <Button size="sm" variant="outline" onClick={load} disabled={loading}>↻ Refresh</Button>
+                    {failedCount > 0 && (
+                        <Button size="sm" variant="outline" onClick={retryAllFailed} disabled={retrying === 'failed'}
+                            className="border-orange-300 text-orange-700 hover:bg-orange-50">
+                            {retrying === 'failed' ? 'Retrying…' : `Retry All Failed (${failedCount})`}
+                        </Button>
+                    )}
                     {openCount > 0 && (
                         <Button size="sm" variant="outline" onClick={retryAll} disabled={retrying === 'all'}>
                             {retrying === 'all' ? 'Retrying…' : `Retry All (${openCount})`}
@@ -1246,6 +1285,7 @@ function ExceptionsTab({ onCountChange }: { onCountChange: (n: number) => void }
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Type</th>
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600 w-48">Error</th>
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Code</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Severity</th>
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">When</th>
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Status</th>
                                 <th className="px-3 py-2.5 w-12"></th>
@@ -1256,19 +1296,29 @@ function ExceptionsTab({ onCountChange }: { onCountChange: (n: number) => void }
                             {filtered.map((e: any, i: number) => {
                                 const isResolved = !!e.resolved_at || e.status === 'resolved'
                                 const vnum = (e.tally_voucher_number || e.voucher_number || e.voucher_guid || '—') as string
+                                const docRef = (e.document_ref || '') as string
                                 const vtype = (e.voucher_type || '—') as string
                                 const errorCode = (e.error_code || '—') as string
                                 const errorMsg = (e.error_message || '—') as string
                                 const createdAt = (e.created_at || '') as string
                                 const id = (e.id || String(i)) as string
+                                const severity = getSeverity(e)
                                 return (
                                     <tr key={id} className={`hover:bg-neutral-50 ${isResolved ? 'opacity-50' : ''}`}>
-                                        <td className="px-3 py-2 font-mono text-neutral-700 whitespace-nowrap">{vnum}</td>
+                                        <td className="px-3 py-2 font-mono text-neutral-700 whitespace-nowrap">
+                                            <div>{vnum}</div>
+                                            {docRef && <div className="text-[10px] text-neutral-400 font-normal">{docRef}</div>}
+                                        </td>
                                         <td className="px-3 py-2 text-neutral-500 whitespace-nowrap">{vtype}</td>
                                         <td className="px-3 py-2 text-red-600">
                                             <div className="truncate max-w-[192px]" title={errorMsg}>{errorMsg}</div>
                                         </td>
                                         <td className="px-3 py-2 font-mono text-orange-600 whitespace-nowrap">{errorCode}</td>
+                                        <td className="px-3 py-2 whitespace-nowrap">
+                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${severity.cls}`}>
+                                                {severity.label}
+                                            </span>
+                                        </td>
                                         <td className="px-3 py-2 text-neutral-400 whitespace-nowrap">{createdAt ? new Date(createdAt).toLocaleString() : '—'}</td>
                                         <td className="px-3 py-2 whitespace-nowrap">
                                             <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${isResolved ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>

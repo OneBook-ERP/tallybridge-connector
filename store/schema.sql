@@ -28,28 +28,15 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 -- ── Sync mapping config (per company, one row per section) ──────────────────
--- The connector is the source of truth for all sync mappings.
--- These are pushed to the cloud config_profiles on registration.
+-- Cloud (config_profiles) is the source of truth for all mappings.
+-- This table is a read-through cache populated by GetCloudConfig.
+-- Scoped by company_id so multiple companies on the same machine are isolated.
 CREATE TABLE IF NOT EXISTS mapping_config (
-    section  TEXT PRIMARY KEY,  -- 'account_coa' | 'ledger_group' | 'gst_ledger' |
-                                 -- 'voucher_type' | 'item_hsn' | 'uom' |
-                                 -- 'party_identity' | 'sync_direction' |
-                                 -- 'conflict_resolution' | 'historical_import' | 'exception_handling'
-    config   TEXT NOT NULL DEFAULT '{}'  -- JSON string
+    company_id  TEXT NOT NULL,   -- matches config.company_id
+    section     TEXT NOT NULL,   -- 'account_coa' | 'gst_ledger' | 'voucher_type' | 'godown_warehouse'
+    config      TEXT NOT NULL DEFAULT '{}',  -- JSON string pulled from cloud
+    PRIMARY KEY (company_id, section)
 );
-
--- Seed all config sections with empty JSON defaults.
-INSERT OR IGNORE INTO mapping_config (section) VALUES ('account_coa');
-INSERT OR IGNORE INTO mapping_config (section) VALUES ('ledger_group');
-INSERT OR IGNORE INTO mapping_config (section) VALUES ('gst_ledger');
-INSERT OR IGNORE INTO mapping_config (section) VALUES ('voucher_type');
-INSERT OR IGNORE INTO mapping_config (section) VALUES ('item_hsn');
-INSERT OR IGNORE INTO mapping_config (section) VALUES ('uom');
-INSERT OR IGNORE INTO mapping_config (section) VALUES ('party_identity');
-INSERT OR IGNORE INTO mapping_config (section) VALUES ('sync_direction');
-INSERT OR IGNORE INTO mapping_config (section) VALUES ('conflict_resolution');
-INSERT OR IGNORE INTO mapping_config (section) VALUES ('historical_import');
-INSERT OR IGNORE INTO mapping_config (section) VALUES ('exception_handling');
 
 CREATE TABLE IF NOT EXISTS master_hashes (
     entity_type  TEXT NOT NULL,  -- 'ledger' | 'stock_item' | 'stock_group' | 'uom' | 'godown'
