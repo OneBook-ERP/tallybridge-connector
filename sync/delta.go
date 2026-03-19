@@ -137,6 +137,7 @@ type SyncBatch struct {
 	StockGroups   []reader.StockGroup     `json:"stockGroups,omitempty"`
 	UOM           []reader.UOM            `json:"uom,omitempty"`
 	Godowns       []reader.Godown         `json:"godowns,omitempty"`
+	LedgerGroups  []reader.Group          `json:"ledgerGroups,omitempty"`
 }
 
 // DeltaSync performs one cycle of querying Tally for changes and sending them to the cloud.
@@ -158,11 +159,17 @@ func DeltaSync(ctx context.Context, client *tally.Client, db *store.Store, cloud
 		}
 	}
 
-	// For incremental syncs (watermark already set), always extend toDate to today.
-	// The configured toDate is only meant to bound the first historical import;
-	// keeping it for delta syncs would exclude vouchers created in a new FY.
+	// For incremental syncs (watermark already set), extend toDate to today and
+	// clamp fromDate to 3 months ago — the configured fromDate is only for the
+	// first historical import. Keeping the full historical range would cause
+	// 20+ monthly chunks to be scanned on every 5-minute poll (all returning 0).
+	// 3 months is enough to catch any backdated voucher amendments.
 	if lastSyncTS != "" {
 		toDate = time.Now()
+		threeMonthsAgo := toDate.AddDate(0, -3, 0)
+		if fromDate.IsZero() || fromDate.Before(threeMonthsAgo) {
+			fromDate = threeMonthsAgo
+		}
 	}
 
 	// 3. Query Tally for vouchers altered since watermark
@@ -231,8 +238,17 @@ func DeltaSync(ctx context.Context, client *tally.Client, db *store.Store, cloud
 		}
 	}
 
+	// Always fetch ledger groups (needed for ancestry chain — lightweight query)
+	var ledgerGroups []reader.Group
+	if lg, err := reader.ListGroups(ctx, client, companyName); err == nil {
+		ledgerGroups = lg
+		fmt.Printf("Fetched %d ledger groups\n", len(ledgerGroups))
+	} else {
+		fmt.Printf("Warning: failed to fetch ledger groups: %v\n", err)
+	}
+
 	if len(active) == 0 && len(ledgers) == 0 && len(stockItems) == 0 &&
-		len(stockGroups) == 0 && len(uomList) == 0 && len(godowns) == 0 {
+		len(stockGroups) == 0 && len(uomList) == 0 && len(godowns) == 0 && len(ledgerGroups) == 0 {
 		fmt.Printf("Delta sync: no new vouchers since %s\n", lastSyncTS)
 		return nil
 	}
@@ -256,6 +272,7 @@ func DeltaSync(ctx context.Context, client *tally.Client, db *store.Store, cloud
 			FromTimestamp: lastSyncTS,
 			ToTimestamp:   toTS,
 			Ledgers:       ledgers,
+			LedgerGroups:  ledgerGroups,
 		}
 		if err := sendBatchToCloud(ctx, cloudURL, machineToken, masterBatch); err != nil {
 			fmt.Printf("Warning: failed to send ledger masters: %v\n", err)

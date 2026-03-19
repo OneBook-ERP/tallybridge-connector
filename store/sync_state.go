@@ -8,6 +8,7 @@ var validCollections = map[string]bool{
 	"vouchers":    true,
 	"ledgers":     true,
 	"stock_items": true,
+	"masters":     true,
 }
 
 // GetLastSyncAt returns the yyyymmddHHmmss timestamp for the given collection,

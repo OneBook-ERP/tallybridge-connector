@@ -77,6 +77,7 @@ cd frontend && npm install && cd ..
 
 # Start dev mode (hot reload for both Go and React)
 wails dev
+~/go/bin/wails dev
 ```
 
 ### Building
