@@ -13,6 +13,14 @@ import {
     GetSyncExceptions, ReprocessException, GetSyncHistory,
     CheckForUpdate, GetDiagnostics,
 } from '../wailsjs/go/main/App'
+
+// New Go methods — bindings auto-generated after `wails dev` hot-reload
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const wailsApp = (window as any)?.go?.main?.App ?? {}
+const SyncMasters = (): Promise<Record<string, unknown>> => wailsApp.SyncMasters?.() ?? Promise.resolve({ status: 'error', message: 'Not available' })
+const GetSyncEnabled = (): Promise<boolean> => wailsApp.GetSyncEnabled?.() ?? Promise.resolve(true)
+const SetSyncEnabled = (v: boolean): Promise<void> => wailsApp.SetSyncEnabled?.(v) ?? Promise.resolve()
+const DeleteCompanyData = (): Promise<Record<string, unknown>> => wailsApp.DeleteCompanyData?.() ?? Promise.resolve({ status: 'error', message: 'Not available' })
 import { Card, CardHeader, CardTitle, CardContent } from './components/ui/card'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
@@ -964,17 +972,21 @@ function OverviewTab({ result }: { result: ActivationResult }) {
     const [syncStats, setSyncStats] = useState<Record<string, string>>({})
     const [loading, setLoading] = useState(true)
     const [syncing, setSyncing] = useState(false)
+    const [syncingMasters, setSyncingMasters] = useState(false)
     const [syncMsg, setSyncMsg] = useState<{ type: 'ok' | 'error'; text: string } | null>(null)
     const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
+    const [syncEnabled, setSyncEnabled] = useState(true)
 
     const refresh = useCallback(async () => {
         setLoading(true)
-        const [svc, stats] = await Promise.all([
+        const [svc, stats, enabled] = await Promise.all([
             GetServiceStatus().catch(() => ({})),
             GetSyncStats().catch(() => ({})),
+            GetSyncEnabled().catch(() => true),
         ])
         setServices(svc as Record<string, { online: boolean; url?: string }>)
         setSyncStats(stats as Record<string, string>)
+        setSyncEnabled(enabled as boolean)
         setLoading(false)
         setLastRefreshed(new Date())
     }, [])
@@ -1072,23 +1084,61 @@ function OverviewTab({ result }: { result: ActivationResult }) {
                 </div>
             </div>
 
-            {/* Manual Sync */}
+            {/* Sync Controls */}
             <div>
-                <h3 className="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-2">Manual Sync</h3>
+                <h3 className="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-2">Sync Controls</h3>
                 <Card>
                     <CardContent>
                         <div className="space-y-3">
-                            <div className="flex items-center gap-3">
-                                <Button size="sm" onClick={() => runSync(false)} disabled={syncing}>
+                            {/* Enable / Disable toggle */}
+                            <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
+                                <div>
+                                    <span className="text-sm font-medium text-neutral-700">Auto Sync</span>
+                                    <p className="text-xs text-neutral-400 mt-0.5">Pause to stop the 5-minute background sync cycle</p>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" className="sr-only peer" checked={syncEnabled}
+                                        onChange={async e => {
+                                            const v = e.target.checked
+                                            setSyncEnabled(v)
+                                            await SetSyncEnabled(v)
+                                        }} />
+                                    <div className="w-10 h-6 bg-neutral-200 peer-checked:bg-blue-600 rounded-full transition-colors peer-checked:after:translate-x-4 after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform" />
+                                </label>
+                            </div>
+                            {/* Action buttons */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <Button size="sm" onClick={() => runSync(false)} disabled={syncing || syncingMasters}>
                                     {syncing ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin inline-block mr-1"></span>Syncing…</> : '↑ Sync Now'}
                                 </Button>
-                                <Button size="sm" variant="outline" onClick={() => runSync(true)} disabled={syncing}>
+                                <Button size="sm" variant="outline" onClick={async () => {
+                                    setSyncingMasters(true); setSyncMsg(null)
+                                    try {
+                                        const res = await SyncMasters()
+                                        setSyncMsg(res.status === 'ok'
+                                            ? { type: 'ok', text: (res.message as string) || 'Masters synced — check Exceptions tab before syncing transactions' }
+                                            : { type: 'error', text: (res.message as string) || 'Master sync failed' })
+                                        const stats = await GetSyncStats().catch(() => ({}))
+                                        setSyncStats(stats as Record<string, string>)
+                                    } catch (e) { setSyncMsg({ type: 'error', text: String(e) }) }
+                                    setSyncingMasters(false)
+                                }} disabled={syncing || syncingMasters}>
+                                    {syncingMasters ? <><span className="w-3 h-3 border-2 border-neutral-400 border-t-transparent rounded-full animate-spin inline-block mr-1"></span>Syncing Masters…</> : '⇄ Sync Masters'}
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={() => runSync(true)} disabled={syncing || syncingMasters}>
                                     Full Sync (reset watermark)
                                 </Button>
-                                <span className="text-xs text-neutral-400 flex-1">
-                                    Sync Now: push new/changed vouchers only. Full Sync: re-send all vouchers from {syncStats.companyName ? '' : 'the configured FY'}.
-                                </span>
                             </div>
+                            <p className="text-xs text-neutral-400">
+                                <strong>Sync Masters</strong>: push ledgers, stock items to cloud + ERPNext before transactions to avoid exceptions. &nbsp;
+                                <strong>Sync Now</strong>: push new/changed vouchers only. &nbsp;
+                                <strong>Full Sync</strong>: re-send all vouchers from the configured FY.
+                            </p>
+                            {!syncEnabled && (
+                                <div className="px-3 py-2 rounded-lg text-xs bg-yellow-50 text-yellow-700 border border-yellow-200">
+                                    ⚠ Auto sync is paused. Click "Sync Now" or "Sync Masters" to sync manually.
+                                </div>
+                            )}
                             {syncMsg && (
                                 <div className={`px-3 py-2 rounded-lg text-xs ${syncMsg.type === 'ok' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-600 border border-red-200'}`}>
                                     {syncMsg.text}
@@ -1151,7 +1201,7 @@ function ExceptionsTab({ onCountChange }: { onCountChange: (n: number) => void }
         try {
             const data = await GetSyncExceptions(300)
             setExceptions(data || [])
-            const open = (data || []).filter((e: Record<string, unknown>) => !e.resolved_at && e.status !== 'resolved').length
+            const open = (data || []).filter((e: Record<string, unknown>) => !e.resolved_at).length
             onCountChange(open)
         } catch { setExceptions([]) }
         setLoading(false)
@@ -1218,17 +1268,17 @@ function ExceptionsTab({ onCountChange }: { onCountChange: (n: number) => void }
     }
 
     const failedCount = exceptions.filter((e: Record<string, unknown>) =>
-        !e.resolved_at && e.status !== 'resolved' &&
+        !e.resolved_at &&
         (e.error_code === 'ERPNEXT_WRITE_FAILED' || e.error_code === 'MASTER_CREATE_FAILED')
     ).length
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const filtered = exceptions.filter((e: any) => {
-        if (filterStatus === 'open') return !e.resolved_at && e.status !== 'resolved'
-        if (filterStatus === 'resolved') return !!e.resolved_at || e.status === 'resolved'
+        if (filterStatus === 'open') return !e.resolved_at
+        if (filterStatus === 'resolved') return !!e.resolved_at
         return true
     })
-    const openCount = exceptions.filter((e: Record<string, unknown>) => !e.resolved_at && e.status !== 'resolved').length
+    const openCount = exceptions.filter((e: Record<string, unknown>) => !e.resolved_at).length
 
     return (
         <div className="p-6 space-y-4 max-w-4xl">
@@ -1281,8 +1331,7 @@ function ExceptionsTab({ onCountChange }: { onCountChange: (n: number) => void }
                     <table className="w-full text-xs">
                         <thead className="bg-neutral-50 border-b">
                             <tr>
-                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Voucher</th>
-                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Type</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Document Ref</th>
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600 w-48">Error</th>
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Code</th>
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Severity</th>
@@ -1294,10 +1343,8 @@ function ExceptionsTab({ onCountChange }: { onCountChange: (n: number) => void }
                         <tbody className="divide-y">
                             {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                             {filtered.map((e: any, i: number) => {
-                                const isResolved = !!e.resolved_at || e.status === 'resolved'
-                                const vnum = (e.tally_voucher_number || e.voucher_number || e.voucher_guid || '—') as string
-                                const docRef = (e.document_ref || '') as string
-                                const vtype = (e.voucher_type || '—') as string
+                                const isResolved = !!e.resolved_at
+                                const docRef = (e.document_ref || '—') as string
                                 const errorCode = (e.error_code || '—') as string
                                 const errorMsg = (e.error_message || '—') as string
                                 const createdAt = (e.created_at || '') as string
@@ -1305,11 +1352,9 @@ function ExceptionsTab({ onCountChange }: { onCountChange: (n: number) => void }
                                 const severity = getSeverity(e)
                                 return (
                                     <tr key={id} className={`hover:bg-neutral-50 ${isResolved ? 'opacity-50' : ''}`}>
-                                        <td className="px-3 py-2 font-mono text-neutral-700 whitespace-nowrap">
-                                            <div>{vnum}</div>
-                                            {docRef && <div className="text-[10px] text-neutral-400 font-normal">{docRef}</div>}
+                                        <td className="px-3 py-2 font-mono text-neutral-700 whitespace-nowrap max-w-[180px]">
+                                            <div className="truncate text-[10px]" title={docRef}>{docRef}</div>
                                         </td>
-                                        <td className="px-3 py-2 text-neutral-500 whitespace-nowrap">{vtype}</td>
                                         <td className="px-3 py-2 text-red-600">
                                             <div className="truncate max-w-[192px]" title={errorMsg}>{errorMsg}</div>
                                         </td>
@@ -1366,31 +1411,32 @@ function LogsTab() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const filtered = records.filter((r: any) => {
-        const status = (r.status || 'pending') as string
+        const status = (r.sync_status || 'PENDING') as string
         if (filterType !== 'all') {
-            const matches = (filterType === 'success' && (status === 'success' || status === 'synced')) ||
-                (filterType === 'failed' && (status === 'failed' || status === 'error')) ||
-                (filterType === 'pending' && (status === 'pending' || status === 'queued'))
+            const matches = (filterType === 'success' && status === 'SYNCED') ||
+                (filterType === 'failed' && status === 'ERROR') ||
+                (filterType === 'pending' && (status === 'PENDING' || status === 'CONFLICT'))
             if (!matches) return false
         }
         if (search) {
             const q = search.toLowerCase()
             return (r.tally_voucher_number as string || '').toLowerCase().includes(q) ||
-                (r.voucher_type as string || '').toLowerCase().includes(q) ||
-                (r.erp_docname as string || '').toLowerCase().includes(q)
+                (r.erpnext_doctype as string || '').toLowerCase().includes(q) ||
+                (r.erpnext_name as string || '').toLowerCase().includes(q)
         }
         return true
     })
 
     const counts = {
-        success: records.filter((r: Record<string, unknown>) => r.status === 'success' || r.status === 'synced').length,
-        failed: records.filter((r: Record<string, unknown>) => r.status === 'failed' || r.status === 'error').length,
-        pending: records.filter((r: Record<string, unknown>) => r.status === 'pending' || r.status === 'queued').length,
+        success: records.filter((r: Record<string, unknown>) => r.sync_status === 'SYNCED').length,
+        failed: records.filter((r: Record<string, unknown>) => r.sync_status === 'ERROR').length,
+        pending: records.filter((r: Record<string, unknown>) => r.sync_status === 'PENDING' || r.sync_status === 'CONFLICT').length,
     }
 
     const statusColor = (status: string) => {
-        if (status === 'success' || status === 'synced') return 'bg-green-100 text-green-700'
-        if (status === 'failed' || status === 'error') return 'bg-red-100 text-red-700'
+        if (status === 'SYNCED') return 'bg-green-100 text-green-700'
+        if (status === 'ERROR') return 'bg-red-100 text-red-700'
+        if (status === 'CONFLICT') return 'bg-orange-100 text-orange-700'
         return 'bg-yellow-100 text-yellow-700'
     }
 
@@ -1437,8 +1483,8 @@ function LogsTab() {
                         <thead className="bg-neutral-50 border-b">
                             <tr>
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Voucher No.</th>
-                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Type</th>
-                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Tally Date</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">DocType</th>
+                                <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Tally GUID</th>
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">ERPNext Doc</th>
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Synced At</th>
                                 <th className="px-3 py-2.5 text-left font-semibold text-neutral-600">Status</th>
@@ -1447,14 +1493,14 @@ function LogsTab() {
                         <tbody className="divide-y">
                             {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                             {filtered.slice(0, 250).map((r: any, i: number) => {
-                                const status = (r.status || 'pending') as string
-                                const syncedAt = (r.synced_at || r.created_at || '') as string
+                                const status = (r.sync_status || 'PENDING') as string
+                                const syncedAt = (r.last_synced_at || '') as string
                                 return (
                                     <tr key={i} className="hover:bg-neutral-50">
                                         <td className="px-3 py-2 font-mono text-neutral-700">{r.tally_voucher_number || '—'}</td>
-                                        <td className="px-3 py-2 text-neutral-500">{r.voucher_type || '—'}</td>
-                                        <td className="px-3 py-2 text-neutral-400">{r.tally_date || '—'}</td>
-                                        <td className="px-3 py-2 font-mono text-blue-600">{r.erp_docname || '—'}</td>
+                                        <td className="px-3 py-2 text-neutral-500">{r.erpnext_doctype || '—'}</td>
+                                        <td className="px-3 py-2 text-neutral-400">{r.tally_guid ? r.tally_guid.slice(0, 8) + '…' : '—'}</td>
+                                        <td className="px-3 py-2 font-mono text-blue-600">{r.erpnext_name || '—'}</td>
                                         <td className="px-3 py-2 text-neutral-400 whitespace-nowrap">{syncedAt ? new Date(syncedAt).toLocaleString() : '—'}</td>
                                         <td className="px-3 py-2">
                                             <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${statusColor(status)}`}>{status}</span>
@@ -1875,12 +1921,69 @@ function SettingsTab({ result }: { result: ActivationResult }) {
 
             <DiagnosticsCard />
 
+            {/* Danger Zone */}
+            <Card className="border-red-200">
+                <CardHeader><CardTitle className="text-red-700">Danger Zone</CardTitle></CardHeader>
+                <CardContent>
+                    <div className="space-y-3">
+                        <p className="text-sm text-neutral-500">
+                            Wipes connector local state: sync watermarks, master hashes, all config keys.
+                            The company registration on cloud is <strong>not</strong> deleted — use the cloud dashboard for that.
+                            Use this for a clean re-migration start.
+                        </p>
+                        <DeleteCompanyButton />
+                    </div>
+                </CardContent>
+            </Card>
+
             <Card>
                 <CardHeader><CardTitle>About</CardTitle></CardHeader>
                 <CardContent>
                     <p className="text-sm text-neutral-500">TallyBridge Connector — local bridge between Tally ERP and ERPNext via TallyBridge Cloud.</p>
                 </CardContent>
             </Card>
+        </div>
+    )
+}
+
+function DeleteCompanyButton() {
+    const [confirm, setConfirm] = useState(false)
+    const [deleting, setDeleting] = useState(false)
+    const [msg, setMsg] = useState<{ type: 'ok' | 'error'; text: string } | null>(null)
+
+    const handleDelete = async () => {
+        setDeleting(true); setMsg(null)
+        try {
+            const res = await DeleteCompanyData()
+            setMsg(res.status === 'ok'
+                ? { type: 'ok', text: 'Local data cleared. Restart the connector and re-register to start fresh.' }
+                : { type: 'error', text: (res.message as string) || 'Delete failed' })
+        } catch (e) { setMsg({ type: 'error', text: String(e) }) }
+        setDeleting(false); setConfirm(false)
+    }
+
+    return (
+        <div className="space-y-2">
+            {!confirm ? (
+                <Button size="sm" variant="outline" onClick={() => setConfirm(true)}
+                    className="border-red-300 text-red-700 hover:bg-red-50">
+                    Reset Connector Local Data
+                </Button>
+            ) : (
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-red-600 font-medium">Are you sure? This cannot be undone.</span>
+                    <Button size="sm" onClick={handleDelete} disabled={deleting}
+                        className="bg-red-600 hover:bg-red-700 text-white">
+                        {deleting ? 'Deleting…' : 'Yes, Delete'}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setConfirm(false)} disabled={deleting}>Cancel</Button>
+                </div>
+            )}
+            {msg && (
+                <div className={`px-3 py-2 rounded text-xs ${msg.type === 'ok' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-600 border border-red-200'}`}>
+                    {msg.text}
+                </div>
+            )}
         </div>
     )
 }

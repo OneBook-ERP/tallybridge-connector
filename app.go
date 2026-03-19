@@ -1599,3 +1599,71 @@ func (a *App) GetDiagnostics() map[string]interface{} {
 
 	return result
 }
+
+// SyncMasters clears the masters watermark and immediately runs a full master sync
+// (ledgers, stock items, groups) without syncing vouchers. Use this before the first
+// voucher sync so Customers, Suppliers, Items and their groups exist in ERPNext.
+func (a *App) SyncMasters() map[string]interface{} {
+	companyID := a.db.GetConfig("company_id")
+	cloudURL := a.db.GetConfig("cloud_url")
+	token := a.db.GetConfig("machine_token")
+	companyName := a.db.GetConfig("company_tally_name")
+	if companyID == "" || cloudURL == "" || token == "" {
+		return map[string]interface{}{"status": "error", "message": "Not registered with cloud"}
+	}
+	// Clear the masters watermark so DeltaSync fetches all master data fresh
+	if err := a.db.SetLastSyncAt("masters", ""); err != nil {
+		return map[string]interface{}{"status": "error", "message": "Failed to clear masters watermark: " + err.Error()}
+	}
+	// Delete all master hashes so filterChanged* treats all records as new
+	if err := a.db.ClearMasterHashes(); err != nil {
+		return map[string]interface{}{"status": "error", "message": "Failed to clear master hashes: " + err.Error()}
+	}
+	if err := tbsync.DeltaSync(a.ctx, a.tallyClient, a.db, cloudURL, token, companyID, companyName); err != nil {
+		return map[string]interface{}{"status": "error", "message": "Master sync failed: " + err.Error()}
+	}
+	return map[string]interface{}{"status": "ok", "message": "Masters synced — check Exceptions tab before syncing transactions"}
+}
+
+// GetSyncEnabled returns whether background sync is enabled (default: true).
+func (a *App) GetSyncEnabled() bool {
+	v := a.db.GetConfig("sync_enabled")
+	return v != "false"
+}
+
+// SetSyncEnabled enables or disables the background sync scheduler.
+func (a *App) SetSyncEnabled(enabled bool) {
+	v := "true"
+	if !enabled {
+		v = "false"
+	}
+	_ = a.db.SetConfig("sync_enabled", v)
+}
+
+// DeleteCompanyData wipes all local connector state for a clean re-migration:
+// sync watermarks, master hashes, and all configuration keys.
+// The cloud-side company record is NOT deleted — use the cloud dashboard for that.
+func (a *App) DeleteCompanyData() map[string]interface{} {
+	// Stop the scheduler if running
+	if a.scheduler != nil {
+		a.scheduler.Stop()
+		a.scheduler = nil
+	}
+	// Clear sync watermarks
+	for _, collection := range []string{"vouchers", "ledgers", "stock_items", "masters"} {
+		_ = a.db.SetLastSyncAt(collection, "")
+	}
+	// Clear master hashes
+	_ = a.db.ClearMasterHashes()
+	// Clear all config keys
+	configKeys := []string{
+		"company_tally_name", "machine_token", "cloud_url", "company_id", "machine_id",
+		"sync_from_date", "sync_to_date", "erpnext_url", "erpnext_api_key", "erpnext_api_secret",
+		"erpnext_company", "tally_url", "tally_company", "erpnext_gstin",
+		"erpnext_warehouse", "erpnext_cost_center", "sync_enabled", "last_registered_at",
+	}
+	for _, k := range configKeys {
+		_ = a.db.SetConfig(k, "")
+	}
+	return map[string]interface{}{"status": "ok", "message": "Local data cleared"}
+}

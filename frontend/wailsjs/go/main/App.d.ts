@@ -11,6 +11,8 @@ export function CreateERPNextFiscalYear(arg1:string,arg2:string,arg3:string,arg4
 
 export function DataQualityScan(arg1:string):Promise<Record<string, any>>;
 
+export function DeleteCompanyData():Promise<Record<string, any>>;
+
 export function FetchAPITokenViaLogin(arg1:string,arg2:string,arg3:string):Promise<Record<string, any>>;
 
 export function GetAllConfig():Promise<Record<string, string>>;
@@ -38,6 +40,8 @@ export function GetMappingConfig(arg1:string):Promise<string>;
 export function GetMappingDefaults(arg1:string):Promise<string>;
 
 export function GetServiceStatus():Promise<Record<string, any>>;
+
+export function GetSyncEnabled():Promise<boolean>;
 
 export function GetSyncExceptions(arg1:number):Promise<Array<Record<string, any>>>;
 
@@ -75,9 +79,13 @@ export function SetConfigValue(arg1:string,arg2:string):Promise<void>;
 
 export function SetMappingConfig(arg1:string,arg2:string):Promise<void>;
 
+export function SetSyncEnabled(arg1:boolean):Promise<void>;
+
 export function SetupERPNextWebhooks():Promise<Record<string, any>>;
 
 export function StartBackgroundSync():Promise<Record<string, any>>;
+
+export function SyncMasters():Promise<Record<string, any>>;
 
 export function SyncNow(arg1:boolean):Promise<Record<string, any>>;
 

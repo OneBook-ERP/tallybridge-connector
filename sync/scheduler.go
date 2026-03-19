@@ -121,6 +121,12 @@ func (s *Scheduler) Start() {
 		for {
 			select {
 			case <-ticker.C:
+				// Skip sync if disabled via the UI toggle; still send heartbeat.
+				if s.db.GetConfig("sync_enabled") == "false" {
+					fmt.Println("[Scheduler] Auto sync is disabled — skipping this cycle")
+					s.sendHeartbeat(nil)
+					continue
+				}
 				// Fetch counts once per sync cycle and include in heartbeat.
 				counts := s.fetchTallyCounts()
 				s.sendHeartbeat(counts)

@@ -22,6 +22,10 @@ export function DataQualityScan(arg1) {
   return window['go']['main']['App']['DataQualityScan'](arg1);
 }
 
+export function DeleteCompanyData() {
+  return window['go']['main']['App']['DeleteCompanyData']();
+}
+
 export function FetchAPITokenViaLogin(arg1, arg2, arg3) {
   return window['go']['main']['App']['FetchAPITokenViaLogin'](arg1, arg2, arg3);
 }
@@ -76,6 +80,10 @@ export function GetMappingDefaults(arg1) {
 
 export function GetServiceStatus() {
   return window['go']['main']['App']['GetServiceStatus']();
+}
+
+export function GetSyncEnabled() {
+  return window['go']['main']['App']['GetSyncEnabled']();
 }
 
 export function GetSyncExceptions(arg1) {
@@ -150,12 +158,20 @@ export function SetMappingConfig(arg1, arg2) {
   return window['go']['main']['App']['SetMappingConfig'](arg1, arg2);
 }
 
+export function SetSyncEnabled(arg1) {
+  return window['go']['main']['App']['SetSyncEnabled'](arg1);
+}
+
 export function SetupERPNextWebhooks() {
   return window['go']['main']['App']['SetupERPNextWebhooks']();
 }
 
 export function StartBackgroundSync() {
   return window['go']['main']['App']['StartBackgroundSync']();
+}
+
+export function SyncMasters() {
+  return window['go']['main']['App']['SyncMasters']();
 }
 
 export function SyncNow(arg1) {

@@ -58,6 +58,16 @@ type MasterEntity struct {
 	Hash string
 }
 
+// ClearMasterHashes deletes all rows from master_hashes, forcing a full re-sync
+// on the next DeltaSync cycle (all entities treated as new/changed).
+func (s *Store) ClearMasterHashes() error {
+	_, err := s.db.Exec(`DELETE FROM master_hashes`)
+	if err != nil {
+		return fmt.Errorf("store: ClearMasterHashes: %w", err)
+	}
+	return nil
+}
+
 // GetChangedMasters returns the GUIDs from entities whose stored hash differs
 // from the supplied hash (or whose GUID has never been seen before).
 // Use this before sending masters to cloud to skip unchanged entities.
