@@ -40,21 +40,22 @@ ERPNext (Cloud SaaS)
 │   └── writer/               # Tally XML writer (reverse sync — create/alter/cancel)
 ├── sync/
 │   ├── delta.go              # Delta sync with master data + monthly chunking
-│   ├── scheduler.go          # Background sync scheduler (5-min interval)
+│   ├── scheduler.go          # Background sync scheduler (5-min interval + heartbeat)
 │   └── reverse.go            # Reverse sync (ERPNext → Tally via job polling)
 ├── store/
 │   ├── store.go              # SQLite database wrapper
 │   ├── config.go             # Config key-value store
 │   ├── schema.sql            # Database schema
 │   ├── sync_state.go         # Sync watermark tracking
+│   ├── master_hash.go        # Master data change detection (content hashing)
 │   ├── job_queue.go          # Local job queue for reverse sync
 │   └── mapping_config.go     # Account mapping config
 ├── cmd/
 │   └── sync-once/            # CLI tool for one-off sync (bypasses GUI)
 ├── frontend/
 │   └── src/
-│       ├── App.tsx           # Main app with step-based setup wizard
-│       ├── components/ui/    # Reusable UI components
+│       ├── App.tsx           # Main app with setup wizard + 5-tab dashboard
+│       ├── components/ui/    # Reusable UI components (Card, Badge, Button)
 │       └── lib/              # Wails bindings & utilities
 ├── build/                    # Build assets (icons, manifests)
 ├── build-windows.sh          # Cross-compile for Windows (ARM64, x64, x86)
@@ -76,7 +77,6 @@ ERPNext (Cloud SaaS)
 cd frontend && npm install && cd ..
 
 # Start dev mode (hot reload for both Go and React)
-wails dev
 ~/go/bin/wails dev
 ```
 
@@ -98,7 +98,7 @@ CGO_ENABLED=1 go test ./...
 
 ### Tally XML Server Setup
 
-1. Open Tally ERP → Gateway of Tally → Configure → Advanced Configuration
+1. Open Tally ERP > Gateway of Tally > Configure > Advanced Configuration
 2. Set **Enable ODBC/XML Server** to `Yes`
 3. Set **Port** to `9000` (default)
 4. The connector auto-discovers Tally on `localhost:9000` or scans the local network
@@ -111,13 +111,26 @@ CGO_ENABLED=1 go test ./...
 3. **Select Company** — Pick a Tally company, set FY date range for initial sync
 4. **Register with Cloud** — Register with TallyBridge Platform, get machine token
 
+### Dashboard (5 tabs)
+1. **Overview** — Sync status, Sync Masters button, Auto Sync toggle, Sync Now
+2. **Exceptions** — Errors from cloud with tier, error code, document ref
+3. **Sync Log** — Sync records with status, ERPNext doctype/name, timestamps
+4. **Mappings** — JSON editor for 11 mapping sections + visual ledger reconciliation with root-type filters (Asset/Liability/Income/Expense)
+5. **Settings** — Config editor, auto-start toggle, diagnostics, delete company
+
 ### Sync Flow
-1. **Scheduler** fires every 5 minutes
-2. **Master data** (ledgers + stock items) synced first so cloud has mappings
+1. **Scheduler** fires every 5 minutes (can be paused via Auto Sync toggle)
+2. **Master data** (ledgers, stock items, UOMs, godowns) synced first with content-hash change detection
 3. **DeltaSync** reads new/modified vouchers from Tally using `$$IsAlteredSince` filter
 4. Large FY data is fetched in **monthly chunks** to avoid Tally timeouts
 5. Vouchers are batched (500 per request) and POSTed to the platform
 6. Sync watermark (last-synced timestamp) persisted in SQLite
+7. **Heartbeat** sent every 30 seconds with connector status + Tally counts every 5 minutes
+
+### Reverse Sync (ERPNext to Tally)
+- Long-poll loop polls cloud for pending write jobs
+- Transforms ERPNext documents to Tally XML format
+- Writes vouchers to Tally via XML import API
 
 ### System Tray
 - App minimizes to system tray on close (background sync continues)
@@ -130,8 +143,9 @@ CGO_ENABLED=1 go test ./...
 - Date range via `SVFROMDATE`/`SVTODATE` in `<STATICVARIABLES>`
 - Company names include FY suffix: `"COMPANY NAME - (2023-24)"`
 - `$$IsAlteredSince` filter for incremental sync
+- `SVCURRENTCOMPANY` required in import XML to target correct company
 
-## App Methods (Go → Frontend)
+## App Methods (Go to Frontend)
 
 | Method | Description |
 |--------|-------------|
@@ -143,6 +157,17 @@ CGO_ENABLED=1 go test ./...
 | `TestERPNextConnection(url, key, secret)` | Verify ERPNext API credentials |
 | `RegisterWithCloud(cloudURL, company)` | Register connector with platform |
 | `StartBackgroundSync()` | Start 5-minute sync scheduler |
+| `SyncMasters()` | Force full master data re-sync |
+| `GetSyncEnabled()` / `SetSyncEnabled(bool)` | Toggle auto-sync on/off |
+| `DeleteCompanyData()` | Wipe all local state for clean reset |
+
+## Releasing
+
+```bash
+# Tag a new version and push — GitHub Actions builds Windows binaries
+git tag v0.X.X
+git push origin v0.X.X
+```
 
 ---
 

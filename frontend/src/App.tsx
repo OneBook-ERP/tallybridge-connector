@@ -1586,6 +1586,20 @@ function DiagnosticsCard() {
 
 // ─── Mappings Tab ─────────────────────────────────────────────────────────────
 
+// Root-type classification for Tally ledger groups
+const TALLY_GROUP_ROOT: Record<string, 'Asset' | 'Liability' | 'Income' | 'Expense'> = {
+    'Sundry Debtors': 'Asset', 'Bank Accounts': 'Asset', 'Cash-in-Hand': 'Asset',
+    'Loans & Advances (Asset)': 'Asset', 'Fixed Assets': 'Asset', 'Current Assets': 'Asset',
+    'Stock-in-Hand': 'Asset', 'Investments': 'Asset', 'Deposits (Asset)': 'Asset',
+    'Sundry Creditors': 'Liability', 'Duties & Taxes': 'Liability', 'Current Liabilities': 'Liability',
+    'Loans & Advances (Liability)': 'Liability', 'Provisions': 'Liability', 'Bank OD Accounts': 'Liability',
+    'Secured Loans': 'Liability', 'Unsecured Loans': 'Liability', 'Capital Account': 'Liability',
+    'Reserves & Surplus': 'Liability', 'Suspense Account': 'Liability',
+    'Sales Accounts': 'Income', 'Direct Income': 'Income', 'Indirect Income': 'Income',
+    'Purchase Accounts': 'Expense', 'Direct Expenses': 'Expense', 'Indirect Expenses': 'Expense',
+}
+const ROOT_TABS = ['All', 'Asset', 'Liability', 'Income', 'Expense'] as const
+
 const MAPPING_SECTIONS = [
     { key: 'account_coa', label: 'Account / CoA', description: 'Tally ledger → ERPNext account' },
     { key: 'ledger_group', label: 'Ledger Groups', description: 'Ledger group → account type' },
@@ -1615,6 +1629,7 @@ function MappingsTab({ result }: { result: ActivationResult }) {
     const [reconcileMap, setReconcileMap] = useState<Record<string, string>>({})
     const [reconcileLoading, setReconcileLoading] = useState(false)
     const [reconcileSearch, setReconcileSearch] = useState('')
+    const [rootFilter, setRootFilter] = useState<typeof ROOT_TABS[number]>('All')
 
     const loadSection = useCallback(async (key: string) => {
         setLoading(true); setSaveStatus('idle'); setJsonError('')
@@ -1738,6 +1753,15 @@ function MappingsTab({ result }: { result: ActivationResult }) {
                                 </Button>
                             </div>
                         </div>
+                        {/* Root-type filter tabs */}
+                        <div className="flex gap-1 mb-2">
+                            {ROOT_TABS.map(t => (
+                                <button key={t} onClick={() => setRootFilter(t)}
+                                    className={`px-3 py-1 text-xs rounded-full font-medium transition-colors ${rootFilter === t ? 'bg-blue-600 text-white' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'}`}>
+                                    {t}
+                                </button>
+                            ))}
+                        </div>
                         <input type="text" placeholder="Search ledger…"
                             className="mb-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                             value={reconcileSearch} onChange={e => setReconcileSearch(e.target.value)} />
@@ -1753,6 +1777,7 @@ function MappingsTab({ result }: { result: ActivationResult }) {
                                     </thead>
                                     <tbody className="divide-y bg-white">
                                         {tallyLedgers
+                                            .filter(l => rootFilter === 'All' || TALLY_GROUP_ROOT[l.parent] === rootFilter)
                                             .filter(l => !reconcileSearch || l.name.toLowerCase().includes(reconcileSearch.toLowerCase()))
                                             .slice(0, 100)
                                             .map(l => (
