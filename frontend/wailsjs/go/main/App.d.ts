@@ -51,6 +51,8 @@ export function GetSyncStats():Promise<Record<string, any>>;
 
 export function GetTallyCounts():Promise<Record<string, any>>;
 
+export function GetTallyGroups(arg1:string):Promise<Array<Record<string, any>>>;
+
 export function GetTallyLedgers(arg1:string):Promise<Array<Record<string, any>>>;
 
 export function GetTallyStockItems(arg1:string):Promise<Array<Record<string, any>>>;

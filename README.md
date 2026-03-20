@@ -165,10 +165,11 @@ CGO_ENABLED=1 go test ./...
 
 ```bash
 # Tag a new version and push — GitHub Actions builds Windows binaries
+cd /Users/apple/Documents/onebook_tally/tallybridge-connector
 git tag v0.X.X
 git push origin v0.X.X
 ```
-
+Replace v0.2.0 with your desired version number. GitHub Actions will build the Windows binaries automatically.
 ---
 
 ## License

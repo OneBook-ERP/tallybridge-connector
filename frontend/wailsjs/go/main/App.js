@@ -102,6 +102,10 @@ export function GetTallyCounts() {
   return window['go']['main']['App']['GetTallyCounts']();
 }
 
+export function GetTallyGroups(arg1) {
+  return window['go']['main']['App']['GetTallyGroups'](arg1);
+}
+
 export function GetTallyLedgers(arg1) {
   return window['go']['main']['App']['GetTallyLedgers'](arg1);
 }

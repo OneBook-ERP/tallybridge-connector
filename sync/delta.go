@@ -141,7 +141,8 @@ type SyncBatch struct {
 }
 
 // DeltaSync performs one cycle of querying Tally for changes and sending them to the cloud.
-func DeltaSync(ctx context.Context, client *tally.Client, db *store.Store, cloudURL string, machineToken string, companyID string, companyName string) error {
+func DeltaSync(ctx context.Context, client *tally.Client, db *store.Store, cloudURL string, machineToken string, companyID string, companyName string, mastersOnly ...bool) error {
+	skipVouchers := len(mastersOnly) > 0 && mastersOnly[0]
 	// 1. Get last sync watermark from DB (empty = first sync, fetches all)
 	lastSyncTS := db.GetLastSyncAt("vouchers")
 
@@ -172,17 +173,19 @@ func DeltaSync(ctx context.Context, client *tally.Client, db *store.Store, cloud
 		}
 	}
 
-	// 3. Query Tally for vouchers altered since watermark
-	vouchers, err := reader.ListDeltaVouchers(ctx, client, companyName, lastSyncTS, fromDate, toDate)
-	if err != nil {
-		return fmt.Errorf("ListDeltaVouchers: %w", err)
-	}
-
-	// Filter out draft (IsOptional), cancelled, and deleted vouchers.
+	// 3. Query Tally for vouchers altered since watermark (skip when mastersOnly)
 	var active []reader.Voucher
-	for _, v := range vouchers {
-		if !v.IsOptional && !v.IsCancelled && !v.IsDeleted {
-			active = append(active, v)
+	if !skipVouchers {
+		vouchers, err := reader.ListDeltaVouchers(ctx, client, companyName, lastSyncTS, fromDate, toDate)
+		if err != nil {
+			return fmt.Errorf("ListDeltaVouchers: %w", err)
+		}
+
+		// Filter out draft (IsOptional), cancelled, and deleted vouchers.
+		for _, v := range vouchers {
+			if !v.IsOptional && !v.IsCancelled && !v.IsDeleted {
+				active = append(active, v)
+			}
 		}
 	}
 

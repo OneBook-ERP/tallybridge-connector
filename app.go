@@ -519,7 +519,7 @@ func (a *App) RegisterWithCloud(cloudURL, companyName string) map[string]interfa
 // GetCloudConfig pulls the latest config from the cloud platform and stores
 // account/GST/voucher-type/godown mappings into the local mapping_config SQLite table.
 func (a *App) GetCloudConfig() map[string]interface{} {
-	data, status, err := a.cloudCall("GET", "/api/connector/config", nil)
+	data, status, err := a.cloudCall("GET", "/connector/config", nil)
 	if err != nil {
 		return map[string]interface{}{"status": "error", "message": err.Error()}
 	}
@@ -681,6 +681,29 @@ func (a *App) GetTallyLedgers(company string) []map[string]interface{} {
 			"parent": l.Parent,
 			"gstin":  l.PartyGSTIN,
 			"gstReg": l.GSTRegistrationType,
+		})
+	}
+	return out
+}
+
+// GetTallyGroups returns full group hierarchy from Tally XML API.
+func (a *App) GetTallyGroups(company string) []map[string]interface{} {
+	if a.tallyClient == nil {
+		return nil
+	}
+	groups, err := reader.ListGroups(a.ctx, a.tallyClient, company)
+	if err != nil {
+		fmt.Printf("[GetTallyGroups] error: %v\n", err)
+		return nil
+	}
+	out := make([]map[string]interface{}, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, map[string]interface{}{
+			"name":             g.Name,
+			"parent":           g.Parent,
+			"primaryGroup":     g.PrimaryGroup,
+			"isRevenue":        g.IsRevenue,
+			"isDeemedPositive": g.IsDeemedPositive,
 		})
 	}
 	return out
@@ -1078,12 +1101,17 @@ func (a *App) SyncNow(fullSync bool) map[string]interface{} {
 	}
 
 	if fullSync {
-		// Reset watermark → DeltaSync will pick up all vouchers from sync_from_date
+		// Reset watermarks → DeltaSync will pick up all vouchers + masters from scratch
 		if err := a.db.SetLastSyncAt("vouchers", ""); err != nil {
-			fmt.Printf("[SyncNow] failed to reset watermark: %v\n", err)
-		} else {
-			fmt.Println("[SyncNow] Watermark reset — full sync mode")
+			fmt.Printf("[SyncNow] failed to reset voucher watermark: %v\n", err)
 		}
+		if err := a.db.SetLastSyncAt("masters", ""); err != nil {
+			fmt.Printf("[SyncNow] failed to reset masters watermark: %v\n", err)
+		}
+		if err := a.db.ClearMasterHashes(); err != nil {
+			fmt.Printf("[SyncNow] failed to clear master hashes: %v\n", err)
+		}
+		fmt.Println("[SyncNow] All watermarks + hashes reset — full sync mode")
 	}
 
 	if err := tbsync.DeltaSync(a.ctx, a.tallyClient, a.db, cloudURL, token, companyID, companyName); err != nil {
@@ -1413,7 +1441,7 @@ func (a *App) GetSyncExceptions(limit int) []map[string]interface{} {
 	if limit <= 0 {
 		limit = 100
 	}
-	path := fmt.Sprintf("/api/connector/exceptions?limit=%d", limit)
+	path := fmt.Sprintf("/connector/exceptions?limit=%d", limit)
 	data, status, err := a.cloudCall("GET", path, nil)
 	if err != nil || status != 200 {
 		return []map[string]interface{}{}
@@ -1470,7 +1498,7 @@ func (a *App) ReprocessException(exceptionId string) map[string]interface{} {
 	if exceptionId != "" && exceptionId != "all" {
 		body["exceptionIds"] = []string{exceptionId}
 	}
-	data, status, err := a.cloudCall("POST", "/api/connector/reprocess-exceptions", body)
+	data, status, err := a.cloudCall("POST", "/connector/reprocess-exceptions", body)
 	if err != nil {
 		return map[string]interface{}{"status": "error", "message": err.Error()}
 	}
@@ -1489,7 +1517,7 @@ func (a *App) GetSyncHistory(limit int) []map[string]interface{} {
 	if limit <= 0 {
 		limit = 200
 	}
-	path := fmt.Sprintf("/api/connector/sync-records?limit=%d", limit)
+	path := fmt.Sprintf("/connector/sync-records?limit=%d", limit)
 	data, status, err := a.cloudCall("GET", path, nil)
 	if err != nil || status != 200 {
 		return []map[string]interface{}{}
@@ -1619,7 +1647,7 @@ func (a *App) SyncMasters() map[string]interface{} {
 	if err := a.db.ClearMasterHashes(); err != nil {
 		return map[string]interface{}{"status": "error", "message": "Failed to clear master hashes: " + err.Error()}
 	}
-	if err := tbsync.DeltaSync(a.ctx, a.tallyClient, a.db, cloudURL, token, companyID, companyName); err != nil {
+	if err := tbsync.DeltaSync(a.ctx, a.tallyClient, a.db, cloudURL, token, companyID, companyName, true); err != nil {
 		return map[string]interface{}{"status": "error", "message": "Master sync failed: " + err.Error()}
 	}
 	return map[string]interface{}{"status": "ok", "message": "Masters synced — check Exceptions tab before syncing transactions"}
